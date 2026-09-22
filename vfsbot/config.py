@@ -98,6 +98,15 @@ class RotationConfig(BaseModel):
     ip_check_url: str = "https://api.ipify.org?format=json"
 
 
+class ProxyAutoConfig(BaseModel):
+    """Automatic per-account proxies: one tiny cloud server per account (SSH SOCKS tunnel).
+    API token lives in data/proxy_provider.json; everything else is automatic."""
+    enabled: bool = False
+    provider: str = "digitalocean"   # digitalocean | vultr
+    region: str = ""                 # "" = provider default (blr1 Bangalore / bom Mumbai)
+    plan: str = ""                   # "" = cheapest default
+
+
 class Config(BaseModel):
     mode: str = "public"   # "public" = no-login earliest-date endpoint (recommended); "login" = old flow
     base_url: str = "https://visa.vfsglobal.com/ind/en/bgr"
@@ -114,6 +123,7 @@ class Config(BaseModel):
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     whatsapp_web: WhatsAppWebConfig = Field(default_factory=WhatsAppWebConfig)
     rotation: RotationConfig = Field(default_factory=RotationConfig)
+    proxy_auto: ProxyAutoConfig = Field(default_factory=ProxyAutoConfig)
     passport_file: str = "documents/passport_bio.jpg"
     team: str = "4indegree · AAI (Anas and Amal Intelligence)"
 

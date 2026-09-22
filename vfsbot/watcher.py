@@ -145,9 +145,12 @@ class Watcher:
         else:
             log.warning("No real Chrome/Brave found — falling back to Playwright's Chromium, which FAILS "
                         "Cloudflare's check on VFS. Install Brave or Google Chrome (non-flatpak).")
+        if self.account.proxy_auto:
+            from .proxies import ensure_tunnel
+            self.account.proxy = ensure_tunnel(self.account.email)   # (re)starts the SSH SOCKS tunnel if needed
         proxy = self.account.playwright_proxy()
         if proxy:
-            log.info("proxy: %s", proxy["server"])
+            log.info("proxy: %s%s", proxy["server"], " (auto tunnel)" if self.account.proxy_auto else "")
         elif self.cfg.rotation.require_proxy:
             raise ProxyError(f"{self.account.name}: no proxy configured and rotation.require_proxy is on")
         self.ctx = self._pw.chromium.launch_persistent_context(

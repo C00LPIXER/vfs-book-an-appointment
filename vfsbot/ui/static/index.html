@@ -204,6 +204,21 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
       <div class="row" style="margin-top:10px"><button class="btn" id="waTestBtn">Test slot alert (real messages + calls to all)</button><button class="btn" id="waNoticeBtn">Test bot-issue notice (message only)</button></div>
     </div>
 
+    <div class="card wide"><h3>Proxy auto-provision — one server &amp; IP per account, no manual proxy setup</h3>
+      <div style="color:var(--muted);font-size:13px">Paste a cloud API token once. The bot then creates a tiny server (India region) for every account that has no proxy, generates its own SSH key, opens a SOCKS tunnel to it and fills the account's proxy field — automatically, also for accounts you add later while the login watcher runs. Removing an account's server: <b>Destroy</b>. Cost ≈ $4–6 / month per account. Datacenter IPs get more Cloudflare checks than residential ones; if every account keeps stalling, put a residential proxy in the account's Proxy field instead (that overrides auto).</div>
+      <div class="fields" style="grid-template-columns:1fr 3fr 1fr 1fr auto;margin-top:10px">
+        <div><label>Provider</label><select id="p_provider"><option value="digitalocean">DigitalOcean (Bangalore)</option><option value="vultr">Vultr (Mumbai / Delhi)</option></select></div>
+        <div><label>API token (write access)</label><input type="password" id="p_token" placeholder="paste token — stored in data/proxy_provider.json" autocomplete="new-password"></div>
+        <div><label>Region (blank = default)</label><input type="text" id="p_region" placeholder="blr1 / bom / del"></div>
+        <div><label>Plan (blank = cheapest)</label><input type="text" id="p_plan" placeholder="s-1vcpu-512mb-10gb"></div>
+        <button class="btn primary" id="pSave" style="margin-bottom:1px">Save</button>
+      </div>
+      <div class="check" style="margin-top:8px"><input type="checkbox" id="p_enabled"><span>Auto-provision: the login watcher creates a server for any account without a proxy before using it</span></div>
+      <div class="row" style="margin-top:8px"><button class="btn" id="pProvision">Provision now for all accounts without a proxy</button><button class="btn danger" id="pDestroy">Destroy all servers</button><span class="mono" id="pState" style="color:var(--muted)"></span></div>
+      <div id="pTable" style="margin-top:10px"></div>
+      <div class="logbox" id="pLog" style="max-height:160px;margin-top:10px;display:none"></div>
+    </div>
+
     <div class="card"><h3>Visa &amp; centres</h3>
       <label>Appointment category</label><select id="c_category"></select>
       <label>Sub-category (empty = first option)</label><select id="c_subcategory"></select>
@@ -438,6 +453,29 @@ function readWa() {
     ack_keyword: r.querySelector('.wa-kw').value, bot_issues: r.querySelector('.wa-issues').checked, enabled: r.querySelector('.wa-on').checked }));
 }
 $('#waAdd').onclick = () => { readWa(); WA.push({ chat: '', mode: 'message_call', call_attempts: 0, ack_keyword: '', bot_issues: false, enabled: true }); renderWa(); };
+async function loadProxies() {
+  try {
+    const d = await api('/api/proxies');
+    $('#p_token').placeholder = d.token_set ? 'token saved — paste a new one to replace' : 'paste token — stored in data/proxy_provider.json';
+    $('#pState').textContent = d.running ? 'working…' : '';
+    $('#pProvision').disabled = d.running || !d.token_set; $('#pDestroy').disabled = d.running || !d.token_set;
+    $('#pTable').innerHTML = d.accounts.length ? `<table><thead><tr><th>Account</th><th>Proxy</th><th>Server IP</th><th>Tunnel</th><th></th></tr></thead><tbody>` + d.accounts.map(a => `<tr><td>${esc(a.label) || esc(a.email)}</td><td class="mono">${a.proxy ? esc(a.proxy) + (a.auto ? ' <span class="tag ok">auto</span>' : ' <span class="tag none">manual</span>') : '<span class="tag err">none</span>'}</td><td class="mono">${a.server_ip || '—'}</td><td>${a.server_ip ? (a.tunnel_up ? '<span class="tag ok">up</span>' : '<span class="tag none">down (starts on demand)</span>') : '—'}</td><td class="row">${!a.proxy ? `<button class="btn p-prov" data-email="${esc(a.email)}" ${d.running || !d.token_set ? 'disabled' : ''}>Provision</button>` : ''}${a.server_ip ? `<button class="btn danger p-destroy" data-email="${esc(a.email)}" ${d.running ? 'disabled' : ''}>Destroy</button>` : ''}</td></tr>`).join('') + '</tbody></table>' : '';
+    const lg = $('#pLog'); if (d.log.length) { lg.style.display = 'block'; lg.textContent = d.log.join('\n'); lg.scrollTop = lg.scrollHeight; }
+    document.querySelectorAll('.p-prov').forEach(b => b.onclick = () => provAction('/api/proxies/provision', { email: b.dataset.email }, 'Provisioning ' + b.dataset.email + '…'));
+    document.querySelectorAll('.p-destroy').forEach(b => b.onclick = () => { if (confirm('Destroy the server for ' + b.dataset.email + '?')) provAction('/api/proxies/destroy', { email: b.dataset.email }, 'Destroying…'); });
+    if (d.running) setTimeout(loadProxies, 3000);
+  } catch (e) { $('#pState').textContent = e.message; }
+}
+async function provAction(url, body, msg) { try { await api(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); toast(msg); setTimeout(loadProxies, 800); } catch (e) { toast(e.message); } }
+$('#pSave').onclick = async () => {
+  try {
+    if ($('#p_token').value.trim()) { await api('/api/proxies/token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: $('#p_token').value.trim() }) }); $('#p_token').value = ''; }
+    CFG.proxy_auto = { ...CFG.proxy_auto, enabled: $('#p_enabled').checked, provider: $('#p_provider').value, region: $('#p_region').value.trim(), plan: $('#p_plan').value.trim() };
+    await api('/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: CFG }) });
+    toast('Proxy settings saved'); loadProxies();
+  } catch (e) { toast(e.message); } };
+$('#pProvision').onclick = () => provAction('/api/proxies/provision', {}, 'Provisioning servers for all accounts without a proxy — watch the log below');
+$('#pDestroy').onclick = () => { if (confirm('Destroy ALL auto-provisioned servers? Accounts go back to no proxy.')) provAction('/api/proxies/destroy', {}, 'Destroying all servers…'); };
 async function loadAccounts() { ACCOUNTS = await api('/api/accounts'); renderAccounts(); }
 $('#acctAdd').onclick = () => { readAccountInputs(); ACCOUNTS.push({ label: '', email: '', orig_email: '', password: '', imap_host: 'imap.gmail.com', imap_user: '', imap_password: '', proxy: '', enabled: true }); renderAccounts(); };
 $('#acctSave').onclick = async () => { readAccountInputs(); try { const r = await api('/api/accounts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accounts: ACCOUNTS.filter(a => a.email.trim()) }) }); toast('Saved ' + r.count + ' account(s)'); loadAccounts(); loadStatus(); } catch (e) { toast('Not saved — ' + e.message); } };
@@ -456,6 +494,9 @@ async function loadConfig() {
   $('#w_enabled').checked = w.enabled !== false; $('#w_stop_all_on_first_ack').checked = w.stop_all_on_first_ack !== false; $('#w_ack_keyword').value = w.ack_keyword || 'ok';
   $('#w_call_attempts').value = w.call_attempts ?? 3; $('#w_call_interval_seconds').value = w.call_interval_seconds ?? 120; $('#w_ring_seconds').value = w.ring_seconds ?? 25;
   WA = (w.contacts || []).map(c => ({ ...c })); renderWa();
+  const pa = CFG.proxy_auto || {};
+  $('#p_provider').value = pa.provider || 'digitalocean'; $('#p_region').value = pa.region || ''; $('#p_plan').value = pa.plan || ''; $('#p_enabled').checked = !!pa.enabled;
+  loadProxies();
   const r = CFG.rotation || {};
   $('#r_enabled').checked = r.enabled !== false; $('#r_verify_ip').checked = r.verify_ip !== false; $('#r_require_proxy').checked = !!r.require_proxy;
   $('#r_login_wait_minutes').value = r.login_wait_minutes ?? 3; $('#r_cooloff_hours').value = r.cooloff_hours ?? 2; $('#r_retry_minutes').value = r.retry_minutes ?? 5;
@@ -472,6 +513,7 @@ $('#saveBtn').onclick = async () => {
     CFG.notify.quiet_hours_from = $('#n_quiet_hours_from').value; CFG.notify.quiet_hours_to = $('#n_quiet_hours_to').value;
     readWa();
     CFG.whatsapp_web = { ...CFG.whatsapp_web, enabled: $('#w_enabled').checked, stop_all_on_first_ack: $('#w_stop_all_on_first_ack').checked, contacts: WA.filter(c => c.chat.trim()), chat: '', ack_keyword: $('#w_ack_keyword').value, call_attempts: +$('#w_call_attempts').value, call_interval_seconds: +$('#w_call_interval_seconds').value, ring_seconds: +$('#w_ring_seconds').value };
+    CFG.proxy_auto = { ...CFG.proxy_auto, enabled: $('#p_enabled').checked, provider: $('#p_provider').value, region: $('#p_region').value.trim(), plan: $('#p_plan').value.trim() };
     CFG.rotation = { ...CFG.rotation, enabled: $('#r_enabled').checked, verify_ip: $('#r_verify_ip').checked, require_proxy: $('#r_require_proxy').checked, login_wait_minutes: +$('#r_login_wait_minutes').value, cooloff_hours: +$('#r_cooloff_hours').value, retry_minutes: +$('#r_retry_minutes').value };
     await api('/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: CFG }) });
     toast('Settings saved');

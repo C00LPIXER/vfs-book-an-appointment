@@ -39,6 +39,7 @@ class Account:
     imap_user: str = ""
     imap_password: str = ""
     proxy: str = ""
+    proxy_auto: bool = False     # proxy was provisioned by vfsbot.proxies (tunnel is started on demand)
     enabled: bool = True
     passport_file: str = ""
 
@@ -71,7 +72,7 @@ class Account:
         return cls(label=d.get("label", ""), email=d.get("email", "").strip(), password=d.get("password", ""),
                    imap_host=(d.get("imap_host") or "imap.gmail.com").strip(),
                    imap_user=d.get("imap_user", "").strip(), imap_password=d.get("imap_password", ""),
-                   proxy=d.get("proxy", "").strip(), enabled=bool(d.get("enabled", True)),
+                   proxy=d.get("proxy", "").strip(), proxy_auto=bool(d.get("proxy_auto")), enabled=bool(d.get("enabled", True)),
                    passport_file=d.get("passport_file", ""))
 
 

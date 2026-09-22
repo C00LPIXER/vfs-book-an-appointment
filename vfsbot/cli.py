@@ -195,6 +195,17 @@ def rotate_loop(cfg: Config, once: bool) -> int:
                 _set(st, status="error", task="no accounts configured — add them on the Settings tab")
                 delay = 60.0
             else:
+                if cfg.proxy_auto.enabled:
+                    # any enabled account without a proxy gets its own server + tunnel first
+                    from .proxies import accounts_needing_proxy, provision
+                    for email in accounts_needing_proxy():
+                        _set(st, status="running", task=f"provisioning proxy server for {email}")
+                        try:
+                            provision(cfg, email, lambda m: log.info("proxy: %s", m))
+                            log_event("control", f"Proxy provisioned automatically for {email}", "info")
+                        except Exception as e:  # noqa: BLE001
+                            log_event("error", f"Proxy provisioning failed for {email}: {e}", "error")
+                    pool = AccountPool()   # reload: proxies were assigned
                 acct = pool.next(exclude=st.get("last_account_email", ""))
                 if acct is None:
                     free_at = pool.next_free_at()
@@ -482,6 +493,29 @@ def cmd_ip(cfg: Config, email: str, as_json: bool) -> int:
     return 0 if all(r["ok"] for r in out) else 1
 
 
+def cmd_proxies(cfg: Config, action: str, email: str) -> int:
+    from . import proxies
+    say = lambda m: print(m)  # noqa: E731
+    if action == "status":
+        for r in proxies.status():
+            print(f"{r['label'] or r['email']:14s} proxy={r['proxy'] or '-':28s} auto={r['auto']!s:5s} "
+                  f"server={r['server_ip'] or '-':16s} tunnel={'up' if r['tunnel_up'] else 'down'}")
+        return 0
+    if action == "provision":
+        (proxies.provision(cfg, email, say) if email else proxies.provision_missing(cfg, say))
+    elif action == "destroy":
+        if email:
+            proxies.deprovision(cfg, email, say)
+        else:
+            for e in list(proxies.load_proxies()):
+                proxies.deprovision(cfg, e, say)
+            proxies.cleanup_orphans(cfg, say)
+    elif action == "tunnels":
+        for e in proxies.load_proxies():
+            print(e, proxies.ensure_tunnel(e))
+    return 0
+
+
 def cmd_test_notify(cfg: Config) -> int:
     for k, v in Notifier(cfg.notify).test_all().items():
         print(f"{k:9s}: {'sent' if v else 'not configured / failed'}")
@@ -502,6 +536,9 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--json", action="store_true", help="print the raw JSON response")
     e.add_argument("--curl", action="store_true", help="print the full curl command (all headers + cookies)")
     sub.add_parser("whatsapp-setup", help="open WhatsApp Web once to link it (QR scan)")
+    pp = sub.add_parser("proxies", help="automatic per-account proxy servers")
+    pp.add_argument("action", choices=["status", "provision", "destroy", "tunnels"])
+    pp.add_argument("--account", default="", help="only this account (email)")
     ipp = sub.add_parser("ip", help="show the public IP each account gets through its proxy")
     ipp.add_argument("--account", default="", help="only this account (email)")
     ipp.add_argument("--json", action="store_true")
@@ -539,6 +576,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_escalation(a.message, a.key)
     if a.cmd == "earliest":
         return cmd_earliest(cfg, a.category, a.json, a.available, a.curl)
+    if a.cmd == "proxies":
+        return cmd_proxies(cfg, a.action, a.account)
     if a.cmd == "ip":
         logging.getLogger().setLevel(logging.WARNING)
         return cmd_ip(cfg, a.account, a.json)

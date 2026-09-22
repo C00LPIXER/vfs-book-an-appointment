@@ -257,7 +257,7 @@ def get_accounts():
              "imap_host": a.get("imap_host") or "imap.gmail.com",
              "imap_user": a.get("imap_user", ""),
              "imap_password": MASK if a.get("imap_password") else "",
-             "proxy": _mask_proxy(a.get("proxy", "")),
+             "proxy": _mask_proxy(a.get("proxy", "")), "proxy_auto": bool(a.get("proxy_auto")),
              "enabled": bool(a.get("enabled", True)),
              "status": stat.get(a.get("email", ""), {})} for a in load_raw_accounts()]
 
@@ -288,13 +288,14 @@ def set_accounts(body: AccountsIn):
         proxy = (a.get("proxy") or "").strip()
         if MASK in proxy:
             proxy = cur.get("proxy", "")
+        auto = bool(cur.get("proxy_auto")) and proxy == cur.get("proxy", "")   # edited by hand → no longer auto
         if any(o["email"] == email for o in out):
             errors.append(f"{email}: listed twice")
             continue
         out.append({"label": (a.get("label") or "").strip(), "email": email, "password": pw,
                     "imap_host": (a.get("imap_host") or "imap.gmail.com").strip(),
                     "imap_user": (a.get("imap_user") or "").strip(), "imap_password": imap_pw,
-                    "proxy": proxy, "enabled": bool(a.get("enabled", True))})
+                    "proxy": proxy, "proxy_auto": auto, "enabled": bool(a.get("enabled", True))})
     if errors:
         raise HTTPException(400, "; ".join(errors))
     save_raw_accounts(out)
@@ -315,6 +316,80 @@ def test_ip(body: dict):
         res = {"ok": False, "note": "timed out (proxy not answering?)"}
     events.log_event("control", f"Proxy test for {email}: {res.get('ip') or '-'} — {res.get('note')}", "info" if res.get("ok") else "warn")
     return res
+
+
+# ---- automatic proxies (vfsbot.proxies) ---------------------------------------------------
+
+_prov_state = {"running": False, "log": []}
+
+
+def _prov_log(msg: str) -> None:
+    _prov_state["log"].append(f"{datetime.now():%H:%M:%S} {msg}")
+    _prov_state["log"] = _prov_state["log"][-60:]
+    events.log_event("control", "proxy: " + msg, "info")
+
+
+def _prov_run(fn) -> None:
+    import threading
+    if _prov_state["running"]:
+        raise HTTPException(409, "a provisioning job is already running")
+
+    def go():
+        _prov_state["running"] = True
+        try:
+            fn(Config.load(), _prov_log)
+        except Exception as e:  # noqa: BLE001
+            _prov_log(f"FAILED — {e}")
+        finally:
+            _prov_state["running"] = False
+    threading.Thread(target=go, daemon=True).start()
+
+
+@app.get("/api/proxies")
+def proxies_status():
+    from .. import proxies
+    return {"token_set": bool(proxies.load_token()), "running": _prov_state["running"],
+            "log": _prov_state["log"], "accounts": proxies.status(), "providers": list(proxies.PROVIDERS)}
+
+
+class ProxyToken(BaseModel):
+    token: str
+
+
+@app.post("/api/proxies/token")
+def proxies_token(body: ProxyToken):
+    from .. import proxies
+    if body.token and body.token != MASK:
+        proxies.save_token(body.token.strip())
+        events.log_event("control", "Cloud API token saved", "info")
+    return {"ok": True}
+
+
+@app.post("/api/proxies/provision")
+def proxies_provision(body: dict):
+    """Provision a server + tunnel for one account (email) or for every account without a proxy."""
+    from .. import proxies
+    email = (body.get("email") or "").strip()
+    if email:
+        _prov_run(lambda cfg, log: proxies.provision(cfg, email, log))
+    else:
+        _prov_run(lambda cfg, log: proxies.provision_missing(cfg, log))
+    return {"ok": True}
+
+
+@app.post("/api/proxies/destroy")
+def proxies_destroy(body: dict):
+    from .. import proxies
+    email = (body.get("email") or "").strip()
+    if email:
+        _prov_run(lambda cfg, log: proxies.deprovision(cfg, email, log))
+    else:
+        def all_(cfg, log):
+            for e in list(proxies.load_proxies()):
+                proxies.deprovision(cfg, e, log)
+            proxies.cleanup_orphans(cfg, log)
+        _prov_run(all_)
+    return {"ok": True}
 
 
 @app.post("/api/accounts/clear-cooloff")

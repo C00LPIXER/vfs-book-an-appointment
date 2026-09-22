@@ -46,6 +46,7 @@ Key modules (`vfsbot/`):
 | `public_watcher.py` | login-free watcher; in-page `fetch` of the public earliest-date endpoint |
 | `watcher.py`        | login watcher (Brave, Cloudflare, OTP, passport, per-centre check), shared `SlotResult` |
 | `accounts.py`       | account pool: per-account creds / IMAP / proxy / profile, LRU rotation, cool-off benching |
+| `proxies.py`        | automatic per-account proxies: cloud server per account (DigitalOcean/Vultr API) + SSH SOCKS tunnel |
 | `cli.py`            | `watch` loop, run-window/interval scheduling, state files, instances |
 | `notify.py`         | hands every notification to `vfsbot.ack` in a subprocess (never blocks the watcher) |
 | `whatsapp_web.py`   | drives an already-linked WhatsApp Web session: message, voice call, read reply |
@@ -172,6 +173,19 @@ Bench rules (`data/accounts_state.json`, doubling per consecutive failure, max 2
 | login / OTP timeout | nothing after `login_wait_minutes` (3) | `cooloff_hours / 2` |
 | proxy dead / leaking | IP lookup fails or IP unchanged | 1 h |
 
+#### Automatic proxies (`vfsbot/proxies.py`, `config.yaml → proxy_auto`)
+
+With a cloud API token in `data/proxy_provider.json` (dashboard → *Proxy auto-provision*) and
+`proxy_auto.enabled`, the rotation loop provisions a server for every enabled account that has no
+proxy before using it: `ssh-keygen` (once, `data/proxy_key`) → register key with the provider →
+create instance tagged `vfs-proxy` (DigitalOcean `blr1` / `s-1vcpu-512mb-10gb`, or Vultr `bom` /
+`vc2-1c-1gb`, Ubuntu 24.04) → poll until active → wait for sshd to accept the key → start
+`ssh -N -D 127.0.0.1:<18000+i>` detached → set the account's proxy to `socks5://127.0.0.1:<port>`
+(`proxy_auto: true`). `Watcher.__enter__` calls `ensure_tunnel()` for auto accounts, so a dead tunnel
+is restarted right before the browser launches. Records in `data/proxies.json`; `vfsbot proxies
+status|provision|destroy|tunnels`. A proxy typed by hand into the account overrides auto. Datacenter
+IPs draw more Turnstile challenges than residential ones.
+
 After a failure the next account is tried after `retry_minutes` (5); if every account is benched the
 watcher sleeps until the first one frees. `cf_clearance` is IP+UA bound, so the pairing
 *account ↔ profile ↔ proxy* is kept fixed — a cookie minted for one account's IP is never replayed
@@ -232,7 +246,8 @@ needs-human, errors, heartbeat). The profile suppresses session-restore so it op
 
 - `config.yaml` — settings (committed; no secrets).
 - `data/` — **gitignored**, everything secret/runtime as JSON: `accounts.json` (VFS creds, IMAP app
-  passwords, proxies), `accounts_state.json` (per-account last use / IP / logins / cool-off).
+  passwords, proxies), `accounts_state.json` (per-account last use / IP / logins / cool-off),
+  `proxy_provider.json` (cloud token), `proxies.json` (provisioned servers), `proxy_key[.pub]`.
 - `browser-profile/<email-slug>/` — one Brave profile per rotated account.
 - `state/` — `events.db`, `<instance>.json` status, `screenshots/`, logs (gitignored).
 - `documents/` — passport image (gitignored). `*-profile/` — live browser sessions (gitignored).
