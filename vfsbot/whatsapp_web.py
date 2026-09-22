@@ -121,14 +121,50 @@ class WhatsAppWeb:
 
     # ---- chat ---------------------------------------------------------------------
 
+    def _dismiss_popovers(self) -> None:
+        """WhatsApp shows tooltips/menus (e.g. the calls hint) in #wa-popovers-bucket that sit over
+        the search box and swallow clicks. Escape closes them; a click on the header is a fallback."""
+        try:
+            for _ in range(3):
+                if not self.page.locator("#wa-popovers-bucket *").count():
+                    return
+                self.page.keyboard.press("Escape")
+                self.page.wait_for_timeout(400)
+            self.page.mouse.move(400, 10)
+            self.page.wait_for_timeout(300)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _focus_search(self) -> bool:
+        """Put the caret in the chat-search box without relying on a pointer click."""
+        box = self._search_box()
+        if not box.count():
+            return False
+        self._dismiss_popovers()
+        for attempt in range(3):
+            try:
+                box.evaluate("el => el.focus()")          # no pointer: nothing can intercept it
+                self.page.wait_for_timeout(200)
+                if box.evaluate("el => el === document.activeElement"):
+                    return True
+                box.click(timeout=4000, force=True)       # force: ignore the overlay
+                return True
+            except Exception as e:  # noqa: BLE001
+                log.debug("focus search attempt %d: %s", attempt, str(e).splitlines()[0][:80])
+                self._dismiss_popovers()
+        return False
+
     def open_chat(self, name: str) -> bool:
         self._use_here()
         box = self._search_box()
-        box.click()
+        if not self._focus_search():
+            log.warning("could not focus the chat search box")
+            return False
         try:
+            box.fill("")
             box.fill(name)
         except Exception:  # noqa: BLE001
-            box.type(name, delay=25)
+            self.page.keyboard.type(name, delay=25)
         self.page.wait_for_timeout(2500)
         # match the chat title case-insensitively (config casing may differ from WhatsApp's)
         hit = self.page.get_by_title(re.compile(re.escape(name), re.I)).first
@@ -138,14 +174,22 @@ class WhatsAppWeb:
         if not hit.count():
             log.warning("chat '%s' not found", name)
             return False
-        hit.click()
+        try:
+            hit.click(timeout=8000)
+        except Exception:  # noqa: BLE001
+            self._dismiss_popovers()
+            hit.click(timeout=8000, force=True)
         self.page.wait_for_timeout(1500)
         return True
 
     def send_message(self, text: str) -> bool:
         try:
             entry = self.page.locator("div[contenteditable='true'][data-tab='10'], footer div[contenteditable='true']").last
-            entry.click()
+            self._dismiss_popovers()
+            try:
+                entry.click(timeout=8000)
+            except Exception:  # noqa: BLE001
+                entry.click(timeout=8000, force=True)
             for line in text.split("\n"):
                 entry.type(line, delay=8)
                 self.page.keyboard.down("Shift"); self.page.keyboard.press("Enter"); self.page.keyboard.up("Shift")
@@ -167,7 +211,11 @@ class WhatsAppWeb:
             if not btn.count():
                 log.warning("Voice call button not found")
                 return False
-            btn.click(timeout=8000)
+            try:
+                btn.click(timeout=8000)
+            except Exception:  # noqa: BLE001
+                self._dismiss_popovers()
+                btn.click(timeout=8000, force=True)
             log.info("call placed, ringing ~%ss", ring_seconds)
             self.page.wait_for_timeout(2000)
             self._use_here()   # a call can trigger the 'use here' dialog again

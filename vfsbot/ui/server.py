@@ -143,6 +143,29 @@ def _running(inst: str) -> bool:
     return bool(_find_watcher_pids(inst))
 
 
+def _want_running(inst: str) -> Path:
+    return STATE / f"{inst}.want_running"
+
+
+def _supervise() -> None:
+    """Restart a watcher that died (crash, OOM, killed browser) — the bot has to survive the night
+    unattended. Only instances started from the dashboard are watched; Stop removes the marker."""
+    import threading
+    import time as _t
+
+    def loop():
+        while True:
+            _t.sleep(60)
+            for inst in INSTANCES:
+                try:
+                    if _want_running(inst).exists() and not _running(inst):
+                        events.log_event("control", f"{INSTANCES[inst]['label']} watcher had stopped — restarting it", "warn")
+                        _start_watcher(inst)
+                except Exception:  # noqa: BLE001
+                    pass
+    threading.Thread(target=loop, daemon=True).start()
+
+
 def _start_watcher(inst: str) -> int:
     if (pids := _find_watcher_pids(inst)):
         return pids[0]
@@ -153,12 +176,14 @@ def _start_watcher(inst: str) -> int:
         [sys.executable, "-m", "vfsbot.cli", "watch", "--instance", inst, "--mode", INSTANCES[inst]["mode"]],
         cwd=ROOT, stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)
     _paths(inst)["pid"].write_text(str(proc.pid))
+    _want_running(inst).touch()
     events.log_event("control", f"{INSTANCES[inst]['label']} watcher started", "info")
     return proc.pid
 
 
 def _stop_watcher(inst: str) -> None:
     import time as _t
+    _want_running(inst).unlink(missing_ok=True)
     _paths(inst)["stop"].touch()
     for _ in range(6):
         if not _find_watcher_pids(inst):
@@ -582,6 +607,10 @@ def run(host: str = "127.0.0.1", port: int = 8787) -> int:
         print(f"Reachable from other devices — sign in with user 'vfs' / password: {ui_password()}")
     import uvicorn
 
+    _supervise()
+    for inst in INSTANCES:                       # bring back whatever was running before a restart
+        if _want_running(inst).exists() and not _running(inst):
+            _start_watcher(inst)
     print(f"VFS Slot Watcher web tool: http://{host}:{port}")
     uvicorn.run(app, host=host, port=port, log_level="warning")
     return 0
