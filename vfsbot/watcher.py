@@ -433,7 +433,7 @@ class Watcher:
             return
 
         log.warning("Login required — please complete the Cloudflare check / sign in in the browser window.")
-        log_event("login", "Login required — signing in", "warn", screenshot=self.screenshot("login"))
+        log_event("login", f"Signing in as {self.account.name}", "info")
         self._prefill_login()
         login_started = datetime.now().astimezone()
 
@@ -454,7 +454,8 @@ class Watcher:
                 log.info("Logged in as %s.", self.account.name)
                 self.logged_in = True
                 self._log_jwt()
-                log_event("login", f"Logged in ({self.account.name}" + (f", ip {self.public_ip}" if self.public_ip else "") + ")", "info")
+                log_event("login", f"Logged in ({self.account.name}" + (f", ip {self.public_ip}" if self.public_ip else "") + ")", "info",
+                          screenshot=self.screenshot("logged_in"))
                 self.page.wait_for_timeout(1500)
                 if self._on_passport_upload():
                     self._upload_passport()      # raises PassportPending if a human still has to press Continue
@@ -751,6 +752,9 @@ class Watcher:
             self.SHOTS.mkdir(parents=True, exist_ok=True)
             name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{re.sub(r'[^a-z0-9]+', '_', tag.lower())}.png"
             self.page.screenshot(path=str(self.SHOTS / name), full_page=True)
+            shots = sorted(self.SHOTS.glob("*.png"), key=lambda f: f.stat().st_mtime)
+            for old in shots[:-400]:          # keep the newest 400
+                old.unlink(missing_ok=True)
             return name
         except Exception as e:  # noqa: BLE001
             log.debug("screenshot failed: %s", e)

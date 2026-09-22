@@ -469,6 +469,11 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
                 live[sc] = {"state": ("error" if r.error else ("slot" if r.available else "none")), "earliest": r.earliest,
                             "checked_at": now, "by": acct.name, "error": r.error}
                 _set(st, centre_live=_live_rows(cfg, live))
+                # one log line + a screenshot of the slot-check page per centre
+                msg = (f"{sc}: check failed ({r.error})" if r.error else f"{sc}: SLOT {r.earliest}" if r.available else f"{sc}: no slot")
+                log_event("check", f"{msg}  [{acct.name}]", "alert" if r.available else ("warn" if r.error else "info"),
+                          {"centre": sc, "available": r.available, "earliest": r.earliest},
+                          w.screenshot(f"{sc}_{'slot' if r.available else 'error' if r.error else 'noslot'}"))
             else:   # skipped (quota) — keep the previous result, note why
                 live[sc] = {**live.get(sc, {}), "state": live.get(sc, {}).get("state") if live.get(sc, {}).get("checked_at") else "pending",
                             "error": "quota spent — next login"}
