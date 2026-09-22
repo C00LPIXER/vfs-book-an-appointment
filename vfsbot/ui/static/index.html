@@ -124,7 +124,7 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
 
 <!-- ============ DASHBOARD ============ -->
 <section class="tab active" id="tab-dash">
-  <div class="card" style="margin-bottom:14px;border-color:var(--line2)"><span class="mono" id="modeNote" style="color:var(--muted)">Public earliest-date mode - no login needed. Figures are VFS's indicative earliest-available-date, refreshed periodically; a human logs in to grab the actual slot.</span></div>
+  <div class="card" style="margin-bottom:14px;border-color:var(--line2)"><span class="mono" id="istClock" style="color:var(--muted);float:right"></span><span class="mono" id="modeNote" style="color:var(--muted)">Public earliest-date mode - no login needed. Figures are VFS's indicative earliest-available-date, refreshed periodically; a human logs in to grab the actual slot.</span></div>
   <div class="grid" style="margin-bottom:14px">
     <div class="card"><h3>Watcher — public earliest-date (no login)</h3>
       <div class="stat" id="dState">—</div>
@@ -144,7 +144,8 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
       <div class="row" style="margin-top:10px">
         <button class="btn primary" id="lStart">Start</button>
         <button class="btn" id="lPause">Pause</button>
-        <button class="btn danger" id="lStop">Stop</button></div></div>
+        <button class="btn danger" id="lStop">Stop</button>
+        <button class="btn" id="lNow" title="Don't wait for the next scheduled login — log in and check the next centres now">Login &amp; check now</button></div></div>
   </div>
   <div class="grid g2" style="margin-bottom:14px">
     <div class="card"><h3>Last sweep (public)</h3><div class="stat" id="dLast">—</div><div class="mono" style="color:var(--muted)" id="dLastAt"></div></div>
@@ -313,7 +314,13 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
 const $ = s => document.querySelector(s);
 const api = async (path, opts) => { const r = await fetch(path, opts); if (!r.ok) throw new Error((await r.json()).detail || r.statusText); return r.json(); };
 const toast = m => { const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2600); };
-const fmt = ts => ts ? ts.replace('T', ' ') : '';
+// All times shown in Indian time, 12-hour. Server timestamps are naive local (IST) ISO strings.
+const IST = 'Asia/Kolkata';
+const toDate = ts => { if (!ts) return null; const hasTz = /([+-]\d\d:?\d\d|Z)$/.test(ts); return new Date(hasTz ? ts : ts + '+05:30'); };
+const fmtTime = ts => { const d = toDate(ts); return d ? d.toLocaleTimeString('en-IN', { timeZone: IST, hour: 'numeric', minute: '2-digit', hour12: true }).toUpperCase() : ''; };
+const fmt = ts => { const d = toDate(ts); if (!d) return ''; const today = new Date().toLocaleDateString('en-IN', { timeZone: IST }); const day = d.toLocaleDateString('en-IN', { timeZone: IST });
+  return (day === today ? '' : d.toLocaleDateString('en-IN', { timeZone: IST, day: '2-digit', month: 'short' }) + ' ') + fmtTime(ts); };
+const untilText = ts => { const d = toDate(ts); if (!d) return ''; const s = (d.getTime() - Date.now()) / 1000; if (s <= 0) return 'now'; return s < 90 ? `in ${Math.round(s)}s` : s < 3600 ? `in ${Math.round(s / 60)} min` : `in ${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`; };
 function vfsUpdatedText(st) {
   const unit = {M: 1, H: 60, D: 1440}[st.vfs_updated_type] || 1;
   let base = (typeof st.vfs_updated_value === 'number') ? st.vfs_updated_value * unit : null;
@@ -363,13 +370,13 @@ async function loadStatus() {
     $('#team').textContent = s.team || '';
     $('#dState').textContent = status.replace('_', ' ');
     $('#dTask').textContent = P.running ? (st.task || '—') : 'not running';
-    $('#dNext').textContent = P.running && st.next_check_in ? `next sweep in ${st.next_check_in}s` : '';
+    $('#dNext').textContent = P.running ? (st.next_run_at ? `last sweep ${fmt(st.last_check_at)} · next sweep at ${fmtTime(st.next_run_at)} (${untilText(st.next_run_at)})` : (st.next_check_in ? `next sweep in ${st.next_check_in}s` : '')) : (st.last_check_at ? `last sweep ${fmt(st.last_check_at)}` : '');
     // login watcher card
     const lst = L.state || {};
     const lstatus = L.paused && L.running ? 'paused' : (L.running ? (lst.status || 'running') : 'stopped');
     $('#lState').textContent = lstatus.replace('_', ' ');
     $('#lTask').textContent = L.running ? (lst.task || '—') : 'not running';
-    $('#lUpdated').textContent = lst.last_check_at ? 'last check ' + fmt(lst.last_check_at) : '';
+    $('#lUpdated').textContent = (lst.last_check_at ? `last login check ${fmt(lst.last_check_at)}` : 'no login check yet') + (L.running && lst.next_run_at ? ` · next login at ${fmtTime(lst.next_run_at)} (${untilText(lst.next_run_at)})` : '');
     $('#lAccount').textContent = L.running && lst.account ? `account: ${lst.account}` + (lst.ip ? `  ·  ip ${lst.ip}` : '') : '';
     $('#otpWho').textContent = lst.account || 'the account';
     const ago = (iso) => { if (!iso) return ''; const d = (Date.now() - new Date(iso).getTime()) / 1000; return d < 60 ? `${Math.round(d)}s ago` : d < 3600 ? `${Math.round(d / 60)} min ago` : `${(d / 3600).toFixed(1)} h ago`; };
@@ -407,6 +414,7 @@ async function loadStatus() {
     $('#recentRows').innerHTML = ev.map(e => `<tr><td class="mono" style="white-space:nowrap">${fmt(e.ts).slice(5)}</td><td><span class="tag ${e.level}">${e.kind}</span></td><td>${e.message}</td></tr>`).join('');
   } catch (e) { $('#statusText').textContent = 'UI offline'; }
 }
+$('#lNow').onclick = () => api('/api/refresh?instance=login', { method: 'POST' }).then(() => toast('Login queued — starts within a few seconds')).catch(e => toast(e.message));
 $('#btnRefresh').onclick = () => api('/api/refresh', { method: 'POST' }).then(() => toast('Refresh queued — updates within a few seconds')).catch(e => toast(e.message));
 $('#lStart').onclick = () => api('/api/control', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'start', instance: 'login' }) }).then(() => { toast('Login watcher starting — it will need an OTP'); loadStatus(); });
 $('#lStop').onclick = () => api('/api/control', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'stop', instance: 'login' }) }).then(() => { toast('Login watcher stopped'); loadStatus(); });
@@ -594,6 +602,7 @@ async function loadShots() {
 }
 
 loadStatus(); setInterval(loadStatus, 3000);
+const tick = () => { const el = $('#istClock'); if (el) el.textContent = 'IST ' + new Date().toLocaleString('en-IN', { timeZone: IST, day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true }).toUpperCase(); }; tick(); setInterval(tick, 1000);
 </script>
 </body>
 </html>

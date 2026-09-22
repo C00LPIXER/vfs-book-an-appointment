@@ -112,6 +112,7 @@ def _matrix_from_raw(raw: dict, centre_order: list[str]) -> tuple[list[str], lis
 def _sleep_keepalive(w: Watcher | None, seconds: float, st: dict) -> None:
     """Sleep in short slices; nudge the page, honour stop, and break early on a force-refresh."""
     end = time.monotonic() + seconds
+    _set(st, next_run_at=(datetime.now() + timedelta(seconds=seconds)).isoformat(timespec="seconds"), next_check_in=int(seconds))
     while (left := end - time.monotonic()) > 0:
         if STOP_FILE.exists():
             return
@@ -250,6 +251,15 @@ def rotate_loop(cfg: Config, once: bool) -> int:
     if direct_ip:
         log.info("machine's own IP: %s", direct_ip)
         _set(st, direct_ip=direct_ip)
+    # A restart is not a reason to log in again: honour the next run time from before the restart.
+    try:
+        wait = (datetime.fromisoformat(st["next_run_at"]) - datetime.now()).total_seconds() if st.get("next_run_at") else 0
+    except Exception:  # noqa: BLE001
+        wait = 0
+    if wait > 30 and not REFRESH_FILE.exists():
+        log.info("resuming schedule — next login in %.0f min (use 'Refresh now' to sweep immediately)", wait / 60)
+        _set(st, status="running", task=f"resuming schedule — next login at {st['next_run_at'][11:16]}")
+        _sleep_keepalive(None, wait, st)
 
     while True:
         if STOP_FILE.exists():
@@ -421,7 +431,7 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
     """One full sweep as `acct`: (rotate IP) -> open browser -> verify IP -> login (+OTP) -> check centres -> close."""
     log.info("sweep as %s (%s)%s", acct.name, acct.email, " via proxy" if acct.proxy else "")
     _set(st, status="running", task=f"opening browser as {acct.name}", account=acct.name,
-         account_email=acct.email, ip="")
+         account_email=acct.email, ip="", next_run_at=None, next_check_in=None)
     if cfg.ip_rotate.enabled and not acct.proxy:
         _set(st, task=f"getting a fresh IP for {acct.name}")
         direct_ip = rotate_ip(cfg, st.get("last_ip", ""))
@@ -487,7 +497,7 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
             results = w.check_all(batch, on_progress=progress)
         except LoginRequired as e:
             e.after_login = True
-            done = [r for r in w.partial_results if r.source not in ("skipped", "error")]
+            done = [r for r in w.partial_results if r.source != "skipped"]
             for c in batch[len(w.partial_results):]:
                 live[short_centre(c)] = {**live.get(short_centre(c), {}), "state": live.get(short_centre(c), {}).get("state") if live.get(short_centre(c), {}).get("checked_at") else "pending", "error": "session ended — next login"}
             for sc, v in live.items():
@@ -500,8 +510,8 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
                 _set(st, centre_cursor=(start + len(done)) % len(all_centres))
                 _handle_results(w, cfg, st, notifier, done, all_centres)
             raise
-        checked = [r for r in results if r.source not in ("skipped", "error")]
-        _set(st, centre_cursor=(start + len(checked)) % len(all_centres))
+        attempted = [r for r in results if r.source != "skipped"]
+        _set(st, centre_cursor=(start + len(attempted)) % len(all_centres))
         _handle_results(w, cfg, st, notifier, results, all_centres)
     log.info("browser closed (%s)", acct.name)
 
@@ -541,7 +551,7 @@ def watch_loop(w: Watcher, cfg: Config, once: bool) -> int:
             elif not allowed:
                 _set(st, status="sleeping", task=f"outside run window ({why})")
             else:
-                _set(st, status="running", task="logging in / checking session")
+                _set(st, status="running", task="logging in / checking session", next_run_at=None, next_check_in=None)
                 w.ensure_logged_in()
                 login_alerted = False
                 n = len(cfg.centre_list)

@@ -676,10 +676,12 @@ class Watcher:
         options = self.page.locator("mat-option")
         # Skip if this dropdown already shows the wanted value (category/sub-category don't change
         # between centres, so re-picking them is wasteful and is what times out).
+        cur = self._selected_text(index)
         if wanted:
-            cur = self._selected_text(index)
             if cur and wanted.lower() in cur.lower():
                 return cur
+        elif cur and not cur.lower().startswith("select"):
+            return cur      # e.g. sub-category kept from the previous centre — the site already re-queried
         last_err: Exception | None = None
         for attempt in range(4):
             try:
@@ -795,6 +797,11 @@ class Watcher:
             # Re-selecting an identical value fires no change event (and no API call), so when the
             # centre is already selected we still re-pick category/sub-category to force a refresh.
             chosen.append(self._select_option(i, wanted[i]))
+            if i >= 1 and self._last_api is not None:
+                # category/sub-category were kept from the previous centre and the site already
+                # called CheckIsSlotAvailable for this one — nothing more to pick
+                self.page.wait_for_timeout(human.jitter(300, 900))
+                break
         log.debug("selected: %s", chosen)
         full_centre = chosen[0] if chosen else centre
 
