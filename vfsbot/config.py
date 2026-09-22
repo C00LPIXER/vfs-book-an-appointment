@@ -92,6 +92,7 @@ class RotationConfig(BaseModel):
     enabled: bool = True
     login_wait_minutes: int = 3        # give up on Cloudflare/OTP after this and move to the next account
     cooloff_hours: float = 2.0         # base cool-off for an account whose login stalled/blocked (doubles per fail)
+    account_rest_hours: float = 2.0    # an account is not used again until this long after its last use
     retry_minutes: int = 5             # wait this long before trying the next account after a failure
     verify_ip: bool = True             # look up the public IP through the proxy before logging in
     require_proxy: bool = False        # refuse to log in when an account has no proxy configured
@@ -129,7 +130,7 @@ class Config(BaseModel):
     # login checks this many centres and the next login continues round the priority list.
     login_centres_per_session: int = 6   # VFS answers ~7 slot checks per login session, then 429s
     sweep_all_centres: bool = True       # one rotation = one account covers every enabled centre,
-    max_logins_per_sweep: int = 8        #   signing in again (same account) until every centre is done
+    max_logins_per_sweep: int = 2        #   at most this many logins per account per rotation
     relogin_gap_seconds: int = 120       #   with this gap (randomised) between those logins
     api_replay: bool = False   # replaying the SPA's API call directly gets 401 (per-request signed header); keep off
     interval_seconds: int = 300          # login mode: one login per this interval

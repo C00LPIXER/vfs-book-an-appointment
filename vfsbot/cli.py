@@ -279,7 +279,7 @@ def rotate_loop(cfg: Config, once: bool) -> int:
             log_event("control", "Watcher stopped", "info")
             return 0
         cfg = _reload_config()
-        pool = AccountPool()
+        pool = AccountPool(rest_hours=cfg.rotation.account_rest_hours)
         delay = next_delay(cfg)
         acct = None
         try:
@@ -308,8 +308,9 @@ def rotate_loop(cfg: Config, once: bool) -> int:
                 acct = pool.next(exclude=st.get("last_account_email", ""))
                 if acct is None:
                     free_at = pool.next_free_at()
-                    _set(st, status="cooling", task="all accounts cooling off" + (f" until {free_at:%H:%M}" if free_at else ""),
-                         accounts=pool.status())
+                    when = free_at.strftime("%I:%M %p").lstrip("0") if free_at else ""
+                    _set(st, status="cooling", task=("every account is resting or cooling off" + (f" — next ready at {when}" if when else "")),
+                         accounts=pool.status(), next_run_at=free_at.isoformat(timespec="seconds") if free_at else None)
                     delay = max(60.0, min(cfg.rotation.retry_minutes * 60.0,
                                           (free_at - datetime.now()).total_seconds() + 5 if free_at else 60.0))
                 else:

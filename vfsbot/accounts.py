@@ -126,9 +126,10 @@ def _now() -> datetime:
 class AccountPool:
     """Round-robin over enabled accounts, skipping the ones that are cooling off."""
 
-    def __init__(self, accounts: list[Account] | None = None):
+    def __init__(self, accounts: list[Account] | None = None, rest_hours: float = 0.0):
         self.accounts = accounts if accounts is not None else load_accounts()
         self.state = load_state()
+        self.rest_hours = rest_hours          # keep an account idle this long after it was used
 
     def _rec(self, email: str) -> dict:
         return self.state.setdefault(email, {})
@@ -140,11 +141,26 @@ class AccountPool:
         until = datetime.fromisoformat(raw)
         return until if until > _now() else None
 
+    def resting_until(self, a: Account) -> datetime | None:
+        """When this account may be used again (spreading logins over the day), or None."""
+        if not self.rest_hours:
+            return None
+        raw = self._rec(a.email).get("last_used_at")
+        if not raw:
+            return None
+        until = datetime.fromisoformat(raw) + timedelta(hours=self.rest_hours)
+        return until if until > _now() else None
+
+    def free_at(self, a: Account) -> datetime | None:
+        """The later of the cool-off and the rest period, or None when the account is ready."""
+        times = [t for t in (self.cooling_until(a), self.resting_until(a)) if t]
+        return max(times) if times else None
+
     def available(self) -> list[Account]:
-        return [a for a in self.accounts if a.enabled and a.password and not self.cooling_until(a)]
+        return [a for a in self.accounts if a.enabled and a.password and not self.free_at(a)]
 
     def next(self, exclude: str = "") -> Account | None:
-        """Least recently used account that is enabled and not cooling off."""
+        """Least recently used account that is enabled, not cooling off and past its rest period."""
         cands = [a for a in self.available() if a.email != exclude] or self.available()
         if not cands:
             return None
@@ -152,8 +168,8 @@ class AccountPool:
         return cands[0]
 
     def next_free_at(self) -> datetime | None:
-        """When the earliest cooling-off account frees up (None if nothing is cooling off)."""
-        times = [self.cooling_until(a) for a in self.accounts if a.enabled and self.cooling_until(a)]
+        """When the first account becomes usable again (cool-off or rest), None if one is ready now."""
+        times = [self.free_at(a) for a in self.accounts if a.enabled and a.password and self.free_at(a)]
         return min(times) if times else None
 
     def mark_used(self, a: Account, ip: str = "") -> None:
@@ -205,6 +221,7 @@ class AccountPool:
                 "last_used_at": r.get("last_used_at"), "last_login_at": r.get("last_login_at"),
                 "last_ip": r.get("last_ip"), "logins": r.get("logins", 0), "fails": r.get("fails", 0),
                 "cooldown_until": cu.isoformat(timespec="seconds") if cu else None,
+                "resting_until": (lambda r: r.isoformat(timespec="seconds") if r else None)(self.resting_until(a)),
                 "imap_error": r.get("imap_error"),
                 "last_error": r.get("last_error"),
             })
