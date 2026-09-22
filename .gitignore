@@ -1,0 +1,25 @@
+# secrets & data — never commit
+.env
+state/accounts.json
+state/*.json
+state/*.db
+state/*.log
+state/
+state/screenshots/
+state/otp.txt
+documents/
+
+# browser profiles (contain live sessions/cookies)
+*-profile/
+browser-profile/
+public-profile/
+whatsapp-profile/
+
+# python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# misc
+*.log

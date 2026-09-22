@@ -1,0 +1,85 @@
+mode: login
+base_url: https://visa.vfsglobal.com/ind/en/bgr
+centre: ''
+centres:
+- name: Cochin
+  enabled: true
+- name: Chennai
+  enabled: true
+- name: Bangalore
+  enabled: true
+- name: Puducherry
+  enabled: true
+- name: Hyderabad
+  enabled: true
+- name: Goa
+  enabled: true
+- name: Pune
+  enabled: true
+- name: Mumbai
+  enabled: true
+- name: Kolkata
+  enabled: true
+- name: Ahmedabad
+  enabled: true
+- name: Jaipur
+  enabled: true
+- name: Gurugram
+  enabled: true
+- name: New Delhi
+  enabled: true
+- name: Chandigarh
+  enabled: true
+- name: Jalandhar
+  enabled: true
+category: D visa
+subcategory: ''
+centre_pause_seconds: 4.0
+interval_seconds: 2700
+jitter_seconds: 900
+schedule:
+  date_from: ''
+  date_to: ''
+  hours_from: 00:00
+  hours_to: '23:59'
+  days:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  timezone: Asia/Kolkata
+burst:
+  enabled: true
+  weekday: 0
+  nth_week: 2
+  start: '13:50'
+  end: '15:00'
+  interval_seconds: 45
+  timezone: Asia/Kolkata
+notify:
+  telegram: true
+  email: true
+  call: true
+  whatsapp: false
+  cooldown_minutes: 30
+  heartbeat_hours: 6
+  alert_top_n: 0
+  quiet_hours_from: ''
+  quiet_hours_to: ''
+browser:
+  headless: false
+  profile_dir: browser-profile
+  executable: ''
+whatsapp_web:
+  enabled: true
+  chat: Aslam 4InDegree OH
+  ack_keyword: ok
+  call_attempts: 3
+  call_interval_seconds: 120
+  ring_seconds: 25
+  profile_dir: whatsapp-profile
+passport_file: documents/passport_bio.jpg
+team: 4indegree · AAI (Anas and Amal Intelligence)

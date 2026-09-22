@@ -1,0 +1,17 @@
+# systemd --user unit: the web tool (which starts/stops the watcher itself).
+# Install:  mkdir -p ~/.config/systemd/user && cp deploy/vfsbot-ui.service ~/.config/systemd/user/
+#           systemctl --user daemon-reload && systemctl --user enable --now vfsbot-ui
+#           loginctl enable-linger $USER      # keep it running when nobody is logged in
+[Unit]
+Description=VFS Slot Watcher web tool (4indegree / AAI)
+After=graphical-session.target network-online.target
+
+[Service]
+WorkingDirectory=%h/4indegree/vfs-book-an-appointment
+ExecStart=%h/4indegree/vfs-book-an-appointment/.venv/bin/vfsbot ui --host 127.0.0.1 --port 8787
+Restart=always
+RestartSec=5
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=default.target

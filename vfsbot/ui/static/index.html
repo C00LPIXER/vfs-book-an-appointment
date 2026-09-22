@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VFS Slot Watcher</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0f14;--bg2:#111820;--panel:#151d27;--panel2:#1b2531;--line:#243040;--line2:#2e3b4e;
+  --text:#e6edf5;--muted:#8fa1b6;--dim:#5f7085;
+  --accent:#ff7a1a;--accent2:#ffa057;--ok:#33d17a;--warn:#f5c02c;--err:#ff5c5c;--info:#5aa9ff;
+  --radius:12px;--mono:'JetBrains Mono',ui-monospace,monospace;--sans:'Inter',system-ui,sans-serif;
+  --logo-light:block;--logo-dark:none;
+}
+:root[data-theme="light"]{
+  --bg:#f4f6f9;--bg2:#ffffff;--panel:#ffffff;--panel2:#f1f4f8;--line:#dde3ea;--line2:#c9d2dd;
+  --text:#101720;--muted:#4e5d70;--dim:#8a97a8;--logo-light:none;--logo-dark:block;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.45}
+a{color:var(--accent2)}
+header{position:sticky;top:0;z-index:5;background:var(--bg2);border-bottom:1px solid var(--line);padding:0 16px;display:flex;align-items:center;gap:14px;height:60px}
+header .logo img{height:28px;display:none}
+header .logo img.light{display:var(--logo-light)}
+header .logo img.dark{display:var(--logo-dark)}
+header .title{font-weight:700;font-size:15px;letter-spacing:.2px}
+header .title small{display:block;font-weight:500;color:var(--muted);font-size:11.5px}
+header .spacer{flex:1}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;border:1px solid var(--line2);font-size:12px;font-weight:600;background:var(--panel)}
+.pill .dot{width:8px;height:8px;border-radius:50%;background:var(--dim)}
+.pill.running .dot{background:var(--ok);box-shadow:0 0 0 3px rgba(51,209,122,.18)}
+.pill.paused .dot,.pill.sleeping .dot{background:var(--warn)}
+.pill.needs_human .dot,.pill.error .dot,.pill.blocked .dot{background:var(--err);box-shadow:0 0 0 3px rgba(255,92,92,.18)}
+nav{display:flex;gap:4px;padding:10px 16px 0;border-bottom:1px solid var(--line);background:var(--bg)}
+nav button{background:none;border:0;color:var(--muted);padding:10px 14px;font:inherit;font-weight:600;cursor:pointer;border-bottom:2px solid transparent}
+nav button.active{color:var(--text);border-bottom-color:var(--accent)}
+main{padding:16px;max-width:1240px;margin:0 auto}
+.tab{display:none}.tab.active{display:block}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.g4{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
+.card h3{margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600}
+.stat{font-size:22px;font-weight:700}
+.stat small{display:block;font-size:12px;color:var(--muted);font-weight:500;margin-top:2px}
+.btn{background:var(--panel2);border:1px solid var(--line2);color:var(--text);padding:8px 14px;border-radius:8px;font:inherit;font-weight:600;cursor:pointer}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.danger{border-color:var(--err);color:var(--err)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin:10px 0 4px}
+input[type=text],input[type=password],input[type=number],input[type=date],input[type=time],select,textarea{
+  width:100%;background:var(--bg2);border:1px solid var(--line2);color:var(--text);padding:8px 10px;border-radius:8px;font:inherit}
+input:focus,select:focus{outline:none;border-color:var(--accent)}
+.check{display:flex;align-items:center;gap:8px;font-size:13px;margin:6px 0}
+.check input{width:16px;height:16px;accent-color:var(--accent)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;padding:6px 8px;border-bottom:1px solid var(--line)}
+td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:.3px}
+.tag.ok{background:rgba(51,209,122,.15);color:var(--ok)}
+.tag.none{background:rgba(143,161,182,.12);color:var(--muted)}
+.tag.err,.tag.error{background:rgba(255,92,92,.15);color:var(--err)}
+.tag.warn{background:rgba(245,192,44,.15);color:var(--warn)}
+.tag.info{background:rgba(90,169,255,.15);color:var(--info)}
+.tag.alert{background:rgba(255,122,26,.18);color:var(--accent2)}
+.tag.ack{background:rgba(51,209,122,.15);color:var(--ok)}
+.matrix{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}
+.matrix th,.matrix td{padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap;text-align:center}
+.matrix th{position:sticky;top:0;background:var(--panel);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px;z-index:1}
+.matrix td.centre,.matrix th.centre{text-align:left;font-weight:600;position:sticky;left:0;background:var(--panel);z-index:1}
+.matrix td.slot{color:var(--ok);font-weight:700;background:rgba(51,209,122,.12);border-radius:6px}
+.matrix td.empty{color:var(--dim)}
+.mwrap{overflow:auto;max-height:560px;border:1px solid var(--line);border-radius:10px}
+.mono{font-family:var(--mono);font-size:12px}
+.centres li{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;margin:4px 0;background:var(--bg2)}
+.centres li .n{width:22px;color:var(--dim);font-family:var(--mono);font-size:12px}
+.centres li .name{flex:1;font-weight:600}
+.centres li button{padding:2px 8px;font-size:12px}
+.centres{list-style:none;padding:0;margin:0}
+.logbox{background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:10px;max-height:420px;overflow:auto;white-space:pre-wrap;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+.shots a{display:block;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg2)}
+.shots img{width:100%;display:block;aspect-ratio:4/3;object-fit:cover;object-position:top}
+.shots span{display:block;padding:6px 8px;font-size:11px;color:var(--muted);font-family:var(--mono)}
+.toast{position:fixed;bottom:18px;right:18px;background:var(--panel2);border:1px solid var(--line2);padding:10px 14px;border-radius:10px;opacity:0;transition:.25s;pointer-events:none}
+.toast.show{opacity:1}
+.otpbox{border:1px dashed var(--err);border-radius:10px;padding:12px;background:rgba(255,92,92,.06)}
+footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
+@media (max-width:640px){header .title small{display:none}main{padding:12px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><img class="light" src="/static/logo-light.avif" alt="4indegree"><img class="dark" src="/static/logo-dark.avif" alt="4indegree"></div>
+  <div class="title">VFS Slot Watcher <small id="team">4indegree · AAI (Anas and Amal Intelligence)</small></div>
+  <div class="spacer"></div>
+  <span class="pill" id="statusPill"><span class="dot"></span><span id="statusText">…</span></span>
+  <button class="btn" id="themeBtn" title="Toggle theme">☾</button>
+</header>
+<nav>
+  <button data-tab="dash" class="active">Dashboard</button>
+  <button data-tab="settings">Settings</button>
+  <button data-tab="logs">Logs</button>
+  <button data-tab="shots">Screenshots</button>
+</nav>
+<main>
+
+<!-- ============ DASHBOARD ============ -->
+<section class="tab active" id="tab-dash">
+  <div class="card" style="margin-bottom:14px;border-color:var(--line2)"><span class="mono" id="modeNote" style="color:var(--muted)">Public earliest-date mode - no login needed. Figures are VFS's indicative earliest-available-date, refreshed periodically; a human logs in to grab the actual slot.</span></div>
+  <div class="grid" style="margin-bottom:14px">
+    <div class="card"><h3>Watcher — public earliest-date (no login)</h3>
+      <div class="stat" id="dState">—</div>
+      <div class="mono" id="dTask" style="color:var(--muted);margin:4px 0 2px"></div>
+      <div class="mono" id="dNext" style="color:var(--dim)"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn primary" id="btnStart">Start</button>
+        <button class="btn" id="btnPause">Pause</button>
+        <button class="btn danger" id="btnStop">Stop</button></div></div>
+    <div class="card" id="loginCard" style="border-color:var(--line2);display:none"><h3>Login watcher — amalkrishnap</h3>
+      <div class="stat" id="lState">—</div>
+      <div class="mono" id="lTask" style="color:var(--muted);margin:4px 0 2px"></div>
+      <div class="mono" id="lUpdated" style="color:var(--dim)"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn primary" id="lStart">Start</button>
+        <button class="btn" id="lPause">Pause</button>
+        <button class="btn danger" id="lStop">Stop</button></div></div>
+  </div>
+  <div class="grid g2" style="margin-bottom:14px">
+    <div class="card"><h3>Last sweep (public)</h3><div class="stat" id="dLast">—</div><div class="mono" style="color:var(--muted)" id="dLastAt"></div></div>
+    <div class="card"><h3>Last alert</h3><div class="stat" id="dAlert">none</div><div class="mono" style="color:var(--muted)" id="dAlertAt"></div></div>
+  </div>
+
+  <div id="otpBox" class="otpbox" style="display:none;margin-bottom:14px">
+    <b>Login watcher needs an OTP.</b> VFS sent it to amalkrishnap's email/SMS/WhatsApp.
+    <div class="row" style="margin-top:8px"><input type="text" id="otpInput" placeholder="6-digit code" style="max-width:160px" class="mono"><button class="btn primary" id="otpBtn">Submit OTP</button></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <h3 style="margin:0">Earliest available date — all centres × categories</h3>
+      <div class="row"><span class="mono" id="mUpdated" style="color:var(--muted)"></span><button class="btn" id="btnRefresh">Refresh now</button></div>
+    </div>
+    <div class="mwrap"><table class="matrix" id="matrix"><thead></thead><tbody></tbody></table></div>
+  </div>
+  <div class="card" id="loginMatrixCard" style="margin-bottom:14px;display:none">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <h3 style="margin:0">Logged-in availability — amalkrishnap (real, post-login)</h3>
+      <span class="mono" id="lmUpdated" style="color:var(--muted)"></span>
+    </div>
+    <div class="mwrap"><table class="matrix" id="lmatrix"><thead></thead><tbody></tbody></table></div>
+  </div>
+  <div class="grid g2">
+    <div class="card"><h3>Centres (priority order)</h3><table><thead><tr><th>#</th><th>Centre</th><th>Status</th><th>Earliest</th></tr></thead><tbody id="centreRows"><tr><td colspan="4" style="color:var(--muted)">No sweep yet.</td></tr></tbody></table></div>
+    <div class="card"><h3>Today</h3><div class="grid g4" id="todayStats"></div>
+      <h3 style="margin-top:14px">Recent activity</h3><table><tbody id="recentRows"></tbody></table></div>
+  </div>
+</section>
+
+<!-- ============ SETTINGS ============ -->
+<section class="tab" id="tab-settings">
+  <div class="grid g2">
+    <div class="card"><h3>VFS accounts</h3>
+      <div style="color:var(--muted);font-size:12px">Add one or more accounts. The first is used by the login watcher; the rest are stored for booking. Watching itself needs no account.</div>
+      <div id="acctList" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:8px"><button class="btn" id="acctAdd">+ Add account</button><button class="btn primary" id="acctSave">Save accounts</button></div>
+      <h3 style="margin-top:16px">Passport bio page</h3>
+      <label>PNG/JPG/PDF, ≤ 2 MB</label>
+      <div class="row"><input type="file" id="passportFile" accept=".jpg,.jpeg,.png,.pdf"><button class="btn" id="passportBtn">Upload</button></div>
+      <div class="mono" id="passportInfo" style="color:var(--muted);margin-top:6px"></div>
+      <h3 style="margin-top:16px">Auto-OTP from inbox (IMAP)</h3>
+      <div style="color:var(--muted);font-size:12px">Gmail: enable 2-step verification → create an <b>App Password</b>. Leave empty to type OTPs by hand.</div>
+      <label>IMAP host</label><input type="text" id="s_imap_host">
+      <label>IMAP user (email)</label><input type="text" id="s_imap_user">
+      <label>IMAP app password</label><input type="password" id="s_imap_password" autocomplete="new-password">
+    </div>
+
+    <div class="card"><h3>Visa &amp; centres</h3>
+      <label>Appointment category</label><select id="c_category"></select>
+      <label>Sub-category (empty = first option)</label><select id="c_subcategory"></select>
+      <label>Centres — tick to check, ▲▼ to set priority (nearest first)</label>
+      <ul class="centres" id="centreList"></ul>
+      <label>Pause between centres (seconds)</label><input type="number" id="c_centre_pause_seconds" min="2" max="60">
+      <label>Only alert for the first N centres (0 = all)</label><input type="number" id="n_alert_top_n" min="0" max="15">
+    </div>
+
+    <div class="card"><h3>Schedule</h3>
+      <label>Check interval</label>
+      <select id="c_interval_seconds">
+        <option value="300">Every 5 minutes</option><option value="600">Every 10 minutes</option>
+        <option value="900">Every 15 minutes</option><option value="1800">Every 30 minutes</option>
+        <option value="2700">Every ~45 min (random 30–60)</option>
+        <option value="3600">Every 1 hour</option><option value="7200">Every 2 hours</option>
+      </select>
+      <div class="row"><div style="flex:1"><label>Run from date</label><input type="date" id="sc_date_from"></div><div style="flex:1"><label>Run until date</label><input type="date" id="sc_date_to"></div></div>
+      <div class="row"><div style="flex:1"><label>Active from (time)</label><input type="time" id="sc_hours_from"></div><div style="flex:1"><label>Active until (time)</label><input type="time" id="sc_hours_to"></div></div>
+      <label>Active days</label><div class="row" id="sc_days"></div>
+      <h3 style="margin-top:16px">Burst mode</h3>
+      <div class="check"><input type="checkbox" id="b_enabled"><span>VFS releases slots every 2nd Monday at 2 pm — poll faster then</span></div>
+      <div class="row"><div style="flex:1"><label>From</label><input type="time" id="b_start"></div><div style="flex:1"><label>Until</label><input type="time" id="b_end"></div><div style="flex:1"><label>Every (s)</label><input type="number" id="b_interval_seconds" min="20"></div></div>
+    </div>
+
+    <div class="card"><h3>Alerts</h3>
+      <div class="check"><input type="checkbox" id="n_telegram"><span>Telegram</span></div>
+      <label>Bot token</label><input type="password" id="s_telegram_bot_token" autocomplete="new-password">
+      <label>Chat / group ID</label><input type="text" id="s_telegram_chat_id">
+      <div class="check" style="margin-top:12px"><input type="checkbox" id="n_email"><span>Email</span></div>
+      <div class="row"><div style="flex:2"><label>SMTP host</label><input type="text" id="s_smtp_host"></div><div style="flex:1"><label>Port</label><input type="number" id="s_smtp_port"></div></div>
+      <label>SMTP user</label><input type="text" id="s_smtp_user">
+      <label>SMTP password (Gmail: App Password)</label><input type="password" id="s_smtp_password" autocomplete="new-password">
+      <label>Send to</label><input type="text" id="s_email_to" placeholder="a@x.com, b@y.com">
+      <div class="check" style="margin-top:12px"><input type="checkbox" id="n_call"><span>Phone call (Twilio)</span></div>
+      <div class="check"><input type="checkbox" id="n_whatsapp"><span>WhatsApp (Twilio WhatsApp sender)</span></div>
+      <label>Twilio Account SID</label><input type="text" id="s_twilio_account_sid">
+      <label>Twilio Auth Token</label><input type="password" id="s_twilio_auth_token" autocomplete="new-password">
+      <label>Twilio phone number (from)</label><input type="text" id="s_twilio_from" placeholder="+1…">
+      <label>Call these numbers</label><input type="text" id="s_call_to" placeholder="+91…, +91…">
+      <label>WhatsApp sender</label><input type="text" id="s_whatsapp_from" placeholder="whatsapp:+14155238886">
+      <label>WhatsApp recipients</label><input type="text" id="s_whatsapp_to" placeholder="whatsapp:+91…, whatsapp:+91…">
+      <div class="row"><div style="flex:1"><label>Quiet hours — no calls from</label><input type="time" id="n_quiet_hours_from"></div><div style="flex:1"><label>until</label><input type="time" id="n_quiet_hours_to"></div></div>
+      <label>Re-alert cooldown (minutes)</label><input type="number" id="n_cooldown_minutes" min="1">
+      <label>Heartbeat every N hours (0 = off)</label><input type="number" id="n_heartbeat_hours" min="0">
+      <div class="row" style="margin-top:12px"><button class="btn" id="testNotifyBtn">Send test to all channels</button></div>
+    </div>
+
+    <div class="card"><h3>WhatsApp escalation (Aslam)</h3>
+      <div style="color:var(--muted);font-size:12px">Uses your own logged-in WhatsApp Web (link it once: run <span class="mono">vfsbot whatsapp-setup</span>). On a real slot it messages the contact with the slot data, then calls; if they reply the keyword it stops, else it calls again.</div>
+      <div class="check" style="margin-top:8px"><input type="checkbox" id="w_enabled"><span>Enable WhatsApp escalation</span></div>
+      <label>Contact (exact WhatsApp chat name)</label><input type="text" id="w_chat">
+      <label>Acknowledge keyword (reply that stops the calls)</label><input type="text" id="w_ack_keyword">
+      <div class="row"><div style="flex:1"><label>Call attempts</label><input type="number" id="w_call_attempts" min="1" max="10"></div>
+        <div style="flex:1"><label>Wait between calls (s)</label><input type="number" id="w_call_interval_seconds" min="30"></div>
+        <div style="flex:1"><label>Ring for (s)</label><input type="number" id="w_ring_seconds" min="5" max="60"></div></div>
+      <div class="row" style="margin-top:10px"><button class="btn" id="waTestBtn">Send a real test now to this contact</button></div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:14px"><button class="btn primary" id="saveBtn">Save settings</button><span class="mono" style="color:var(--muted)">Saved settings are picked up by the running bot on its next cycle.</span></div>
+</section>
+
+<!-- ============ LOGS ============ -->
+<section class="tab" id="tab-logs">
+  <div class="card">
+    <div class="row" style="margin-bottom:10px">
+      <select id="fKind" style="width:auto"><option value="">All kinds</option><option>login</option><option>otp</option><option>check</option><option>alert</option><option>error</option><option>blocked</option><option>upload</option><option>ack</option><option>control</option></select>
+      <select id="fLevel" style="width:auto"><option value="">All levels</option><option>info</option><option>warn</option><option>error</option><option>alert</option></select>
+      <button class="btn" id="refreshEvents">Refresh</button>
+    </div>
+    <table><thead><tr><th>Time</th><th>Kind</th><th>Level</th><th>Message</th><th>Shot</th></tr></thead><tbody id="eventRows"></tbody></table>
+  </div>
+  <div class="card" style="margin-top:14px"><h3>Raw log (last 300 lines)</h3><div class="logbox" id="rawLog"></div></div>
+</section>
+
+<!-- ============ SCREENSHOTS ============ -->
+<section class="tab" id="tab-shots">
+  <div class="card"><h3>Screenshots (taken on login, OTP, alerts, errors, blocks)</h3><div class="shots" id="shotGrid"></div></div>
+</section>
+
+</main>
+<footer>VFS Slot Watcher · built by <b>4indegree</b> tech team · <b>AAI</b> — Anas and Amal Intelligence · notify-only, booking is done by the applicant</footer>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = async (path, opts) => { const r = await fetch(path, opts); if (!r.ok) throw new Error((await r.json()).detail || r.statusText); return r.json(); };
+const toast = m => { const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2600); };
+const fmt = ts => ts ? ts.replace('T', ' ') : '';
+function vfsUpdatedText(st) {
+  const unit = {M: 1, H: 60, D: 1440}[st.vfs_updated_type] || 1;
+  let base = (typeof st.vfs_updated_value === 'number') ? st.vfs_updated_value * unit : null;
+  if (base === null) return st.vfs_updated ? 'Last updated ' + st.vfs_updated : '';
+  // add minutes elapsed since we fetched it, so it keeps counting up live
+  if (st.vfs_fetched_at) base += Math.max(0, (Date.now() - new Date(st.vfs_fetched_at).getTime()) / 60000);
+  const m = Math.round(base);
+  let txt;
+  if (m < 1) txt = 'just now';
+  else if (m < 60) txt = m + ' minute' + (m === 1 ? '' : 's') + ' back';
+  else { const h = Math.floor(m / 60), mm = m % 60; txt = h + 'h' + (mm ? ' ' + mm + 'm' : '') + ' back'; }
+  return 'Last updated ' + txt;
+}
+
+// ---- theme ----
+const root = document.documentElement;
+try { root.dataset.theme = localStorage.getItem('theme') || 'dark'; } catch {}
+$('#themeBtn').textContent = root.dataset.theme === 'dark' ? '☀' : '☾';
+$('#themeBtn').onclick = () => { root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark'; $('#themeBtn').textContent = root.dataset.theme === 'dark' ? '☀' : '☾'; try { localStorage.setItem('theme', root.dataset.theme); } catch {} };
+
+// ---- tabs ----
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.id === 'tab-' + b.dataset.tab));
+  if (b.dataset.tab === 'logs') loadEvents(); if (b.dataset.tab === 'shots') loadShots(); if (b.dataset.tab === 'settings') loadConfig();
+});
+
+function renderMatrix(sel, st) {
+  const cats = st.earliest_categories || []; const rows = st.earliest_matrix || [];
+  const mt = document.querySelector(sel + ' thead'); const mb = document.querySelector(sel + ' tbody');
+  if (cats.length && rows.length) {
+    mt.innerHTML = '<tr><th class="centre">Centre</th>' + cats.map(c => `<th>${c.replace('Visa','').replace('- Less than 90 days','<90d')}</th>`).join('') + '</tr>';
+    mb.innerHTML = rows.map(r => '<tr><td class="centre">' + r.centre + '</td>' + cats.map(c => { const d = (r.cells || {})[c] || ''; return d ? `<td class="slot">${d}</td>` : '<td class="empty">–</td>'; }).join('') + '</tr>').join('');
+    return true;
+  }
+  mt.innerHTML=''; mb.innerHTML='<tr><td class="empty" style="padding:14px">No data yet.</td></tr>'; return false;
+}
+// ---- dashboard ----
+async function loadStatus() {
+  try {
+    const s = await api('/api/status');
+    const P = (s.instances && s.instances.public) || { running: s.running, paused: s.paused, state: s.state };
+    const L = (s.instances && s.instances.login) || { running: false, paused: false, state: {} };
+    const st = P.state || {};
+    const status = P.paused && P.running ? 'paused' : (P.running ? (st.status || 'running') : 'stopped');
+    const pill = $('#statusPill'); pill.className = 'pill ' + status; $('#statusText').textContent = status.replace('_', ' ');
+    $('#team').textContent = s.team || '';
+    $('#dState').textContent = status.replace('_', ' ');
+    $('#dTask').textContent = P.running ? (st.task || '—') : 'not running';
+    $('#dNext').textContent = P.running && st.next_check_in ? `next sweep in ${st.next_check_in}s` : '';
+    // login watcher card
+    const lst = L.state || {};
+    const lstatus = L.paused && L.running ? 'paused' : (L.running ? (lst.status || 'running') : 'stopped');
+    $('#lState').textContent = lstatus.replace('_', ' ');
+    $('#lTask').textContent = L.running ? (lst.task || '—') : 'not running';
+    $('#lUpdated').textContent = lst.last_check_at ? 'last check ' + fmt(lst.last_check_at) : '';
+    $('#lStart').disabled = L.running; $('#lStop').disabled = !L.running;
+    $('#lPause').textContent = L.paused ? 'Resume' : 'Pause';
+    // login availability section
+    const lcard = $('#loginMatrixCard');
+    if ((lst.earliest_matrix || []).length) { lcard.style.display = 'block'; renderMatrix('#lmatrix', lst); $('#lmUpdated').textContent = vfsUpdatedText(lst) || ('last check ' + fmt(lst.last_check_at)); }
+    else if (L.running) { lcard.style.display = 'block'; renderMatrix('#lmatrix', lst); }
+    else { lcard.style.display = 'none'; }
+    const res = st.last_results || []; const avail = res.filter(r => r.available);
+    $('#dLast').textContent = res.length ? (avail.length ? `${avail.length} centre(s) open` : 'no slots') : '—';
+    $('#dLastAt').textContent = fmt(st.last_check_at);
+    $('#dAlert').textContent = st.last_alert_key ? st.last_alert_key.map(k => `${k[0]} ${k[1]}`).join(', ') : 'none';
+    $('#dAlertAt').textContent = st.last_alert_at ? fmt(st.last_alert_at) + ' via ' + (st.last_alert_channels || []).join(', ') : '';
+    $('#btnStart').disabled = P.running; $('#btnStop').disabled = !P.running;
+    $('#btnPause').textContent = P.paused ? 'Resume' : 'Pause';
+    $('#otpBox').style.display = s.otp_pending ? 'block' : 'none';
+    $('#centreRows').innerHTML = res.length ? res.map((r, i) => `<tr><td class="mono">${i + 1}</td><td>${r.centre}</td><td>${r.error ? '<span class="tag err">error</span>' : (r.available ? '<span class="tag ok">SLOT</span>' : '<span class="tag none">none</span>')}</td><td class="mono">${r.earliest || (r.error || '')}</td></tr>`).join('') : '<tr><td colspan="4" style="color:var(--muted)">No sweep yet.</td></tr>';
+    const c = s.counts_today || {}; const sum = (k) => Object.entries(c).filter(([kk]) => kk.startsWith(k + ':')).reduce((a, [, v]) => a + v, 0);
+    $('#todayStats').innerHTML = [['Sweeps', sum('check')], ['Alerts', sum('alert')], ['Logins', sum('login')], ['Errors', sum('error') + sum('blocked')]].map(([l, v]) => `<div><div class="stat">${v}<small>${l}</small></div></div>`).join('');
+    // public availability matrix
+    if (renderMatrix('#matrix', st)) $('#mUpdated').textContent = vfsUpdatedText(st); else $('#mUpdated').textContent = '';
+    const ev = await api('/api/events?limit=8');
+    $('#recentRows').innerHTML = ev.map(e => `<tr><td class="mono" style="white-space:nowrap">${fmt(e.ts).slice(5)}</td><td><span class="tag ${e.level}">${e.kind}</span></td><td>${e.message}</td></tr>`).join('');
+  } catch (e) { $('#statusText').textContent = 'UI offline'; }
+}
+$('#btnRefresh').onclick = () => api('/api/refresh', { method: 'POST' }).then(() => toast('Refresh queued — updates within a few seconds')).catch(e => toast(e.message));
+$('#lStart').onclick = () => api('/api/control', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'start', instance: 'login' }) }).then(() => { toast('Login watcher starting — it will need an OTP'); loadStatus(); });
+$('#lStop').onclick = () => api('/api/control', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'stop', instance: 'login' }) }).then(() => { toast('Login watcher stopped'); loadStatus(); });
+$('#lPause').onclick = async () => { const s = await api('/api/status'); const paused = s.instances.login.paused; await api('/api/control', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: paused ? 'resume' : 'pause', instance: 'login' }) }); loadStatus(); };
+$('#btnStart').onclick = () => api('/api/control', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'start' }) }).then(() => { toast('Watcher starting — a browser window will open'); loadStatus(); });
+$('#btnStop').onclick = () => api('/api/control', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'stop' }) }).then(() => { toast('Stop requested'); loadStatus(); });
+$('#btnPause').onclick = async () => { const s = await api('/api/status'); await api('/api/control', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: s.paused ? 'resume' : 'pause' }) }); toast(s.paused ? 'Resumed' : 'Paused'); loadStatus(); };
+$('#otpBtn').onclick = () => api('/api/otp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: $('#otpInput').value }) }).then(() => { toast('OTP sent to the bot'); $('#otpInput').value = ''; }).catch(e => toast(e.message));
+
+// ---- settings ----
+let CFG = null, CATS = {};
+const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+function renderCentres() {
+  $('#centreList').innerHTML = CFG.centres.map((c, i) => `<li><span class="n">${i + 1}</span><input type="checkbox" ${c.enabled ? 'checked' : ''} data-i="${i}" class="cen"><span class="name">${c.name}</span><button class="btn" data-up="${i}">▲</button><button class="btn" data-down="${i}">▼</button></li>`).join('');
+  document.querySelectorAll('.cen').forEach(x => x.onchange = () => CFG.centres[+x.dataset.i].enabled = x.checked);
+  document.querySelectorAll('[data-up]').forEach(b => b.onclick = () => { const i = +b.dataset.up; if (i > 0) { [CFG.centres[i - 1], CFG.centres[i]] = [CFG.centres[i], CFG.centres[i - 1]]; renderCentres(); } });
+  document.querySelectorAll('[data-down]').forEach(b => b.onclick = () => { const i = +b.dataset.down; if (i < CFG.centres.length - 1) { [CFG.centres[i + 1], CFG.centres[i]] = [CFG.centres[i], CFG.centres[i + 1]]; renderCentres(); } });
+}
+function renderSubcats() { const cat = $('#c_category').value; const subs = CATS[cat] || []; $('#c_subcategory').innerHTML = '<option value="">(first option)</option>' + subs.map(s => `<option ${s === CFG.subcategory ? 'selected' : ''}>${s}</option>`).join(''); }
+let ACCOUNTS = [];
+function renderAccounts() {
+  $('#acctList').innerHTML = ACCOUNTS.map((a, i) => `
+    <div class="row" data-ai="${i}" style="margin:6px 0;gap:6px;align-items:center">
+      <input type="text" class="acc-label" placeholder="Label (e.g. Client 1)" value="${(a.label||'').replace(/"/g,'&quot;')}" style="flex:1">
+      <input type="text" class="acc-email" placeholder="email" value="${(a.email||'').replace(/"/g,'&quot;')}" style="flex:2" autocomplete="off">
+      <input type="password" class="acc-pass" placeholder="password" value="${(a.password||'').replace(/"/g,'&quot;')}" style="flex:2" autocomplete="new-password">
+      <button class="btn acc-del" data-del="${i}" title="remove">✕</button>
+    </div>`).join('') || '<div class="mono" style="color:var(--dim)">No accounts yet — click “Add account”.</div>';
+  document.querySelectorAll('.acc-del').forEach(b => b.onclick = () => { ACCOUNTS.splice(+b.dataset.del, 1); readAccountInputs(); renderAccounts(); });
+}
+function readAccountInputs() {
+  const rows = [...document.querySelectorAll('#acctList [data-ai]')];
+  ACCOUNTS = rows.map(r => ({ label: r.querySelector('.acc-label').value, email: r.querySelector('.acc-email').value, password: r.querySelector('.acc-pass').value }));
+}
+async function loadAccounts() { ACCOUNTS = await api('/api/accounts'); renderAccounts(); }
+$('#acctAdd').onclick = () => { readAccountInputs(); ACCOUNTS.push({ label: '', email: '', password: '' }); renderAccounts(); };
+$('#acctSave').onclick = async () => { readAccountInputs(); try { const r = await api('/api/accounts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accounts: ACCOUNTS.filter(a => a.email.trim()) }) }); toast('Saved ' + r.count + ' account(s)'); loadAccounts(); } catch (e) { toast(e.message); } };
+async function loadConfig() {
+  const d = await api('/api/config'); CFG = d.config; CATS = d.categories;
+  CFG.centres = CFG.centres.map(c => typeof c === 'string' ? { name: c, enabled: true } : c);
+  for (const [k, v] of Object.entries(d.secrets)) { const el = $('#s_' + k); if (el) el.value = v ?? ''; }
+  $('#c_category').innerHTML = Object.keys(CATS).map(c => `<option ${c === CFG.category ? 'selected' : ''}>${c}</option>`).join(''); renderSubcats();
+  $('#c_category').onchange = renderSubcats;
+  renderCentres();
+  $('#c_centre_pause_seconds').value = CFG.centre_pause_seconds; $('#c_interval_seconds').value = String(CFG.interval_seconds);
+  $('#sc_date_from').value = CFG.schedule.date_from; $('#sc_date_to').value = CFG.schedule.date_to; $('#sc_hours_from').value = CFG.schedule.hours_from; $('#sc_hours_to').value = CFG.schedule.hours_to;
+  $('#sc_days').innerHTML = DAYS.map((d, i) => `<label class="check" style="margin:0 8px 0 0"><input type="checkbox" class="day" data-d="${i}" ${CFG.schedule.days.includes(i) ? 'checked' : ''}>${d}</label>`).join('');
+  $('#b_enabled').checked = CFG.burst.enabled; $('#b_start').value = CFG.burst.start; $('#b_end').value = CFG.burst.end; $('#b_interval_seconds').value = CFG.burst.interval_seconds;
+  for (const k of ['telegram', 'email', 'call', 'whatsapp']) $('#n_' + k).checked = CFG.notify[k];
+  for (const k of ['cooldown_minutes', 'heartbeat_hours', 'alert_top_n', 'quiet_hours_from', 'quiet_hours_to']) $('#n_' + k).value = CFG.notify[k];
+  const w = CFG.whatsapp_web || {};
+  $('#w_enabled').checked = !!w.enabled; $('#w_chat').value = w.chat || ''; $('#w_ack_keyword').value = w.ack_keyword || 'ok';
+  $('#w_call_attempts').value = w.call_attempts ?? 3; $('#w_call_interval_seconds').value = w.call_interval_seconds ?? 120; $('#w_ring_seconds').value = w.ring_seconds ?? 25;
+  await loadAccounts();
+  const pi = await api('/api/passport'); $('#passportInfo').textContent = pi.exists ? `current: ${pi.path} (${Math.round(pi.size / 1024)} KB)` : 'no passport file uploaded yet';
+}
+$('#saveBtn').onclick = async () => {
+  try {
+    CFG.category = $('#c_category').value; CFG.subcategory = $('#c_subcategory').value;
+    CFG.centre_pause_seconds = +$('#c_centre_pause_seconds').value; CFG.interval_seconds = +$('#c_interval_seconds').value;
+    CFG.schedule = { ...CFG.schedule, date_from: $('#sc_date_from').value, date_to: $('#sc_date_to').value, hours_from: $('#sc_hours_from').value || '00:00', hours_to: $('#sc_hours_to').value || '23:59', days: [...document.querySelectorAll('.day:checked')].map(x => +x.dataset.d) };
+    CFG.burst = { ...CFG.burst, enabled: $('#b_enabled').checked, start: $('#b_start').value, end: $('#b_end').value, interval_seconds: +$('#b_interval_seconds').value };
+    for (const k of ['telegram', 'email', 'call', 'whatsapp']) CFG.notify[k] = $('#n_' + k).checked;
+    for (const k of ['cooldown_minutes', 'heartbeat_hours', 'alert_top_n']) CFG.notify[k] = +$('#n_' + k).value;
+    CFG.notify.quiet_hours_from = $('#n_quiet_hours_from').value; CFG.notify.quiet_hours_to = $('#n_quiet_hours_to').value;
+    CFG.whatsapp_web = { ...CFG.whatsapp_web, enabled: $('#w_enabled').checked, chat: $('#w_chat').value, ack_keyword: $('#w_ack_keyword').value, call_attempts: +$('#w_call_attempts').value, call_interval_seconds: +$('#w_call_interval_seconds').value, ring_seconds: +$('#w_ring_seconds').value };
+    const secrets = {}; document.querySelectorAll('[id^="s_"]').forEach(el => { if (el) secrets[el.id.slice(2)] = el.value; });
+    await api('/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: CFG, secrets }) });
+    toast('Settings saved');
+  } catch (e) { toast('Save failed: ' + e.message); }
+};
+$('#passportBtn').onclick = async () => {
+  const f = $('#passportFile').files[0]; if (!f) return toast('Choose a file first');
+  const fd = new FormData(); fd.append('file', f);
+  try { const r = await api('/api/passport', { method: 'POST', body: fd }); toast('Passport saved'); $('#passportInfo').textContent = `current: ${r.path} (${Math.round(r.size / 1024)} KB)`; } catch (e) { toast(e.message); }
+};
+$('#waTestBtn').onclick = () => { if (!confirm('Send a REAL WhatsApp message and place a call to ' + $('#w_chat').value + ' now?')) return; api('/api/whatsapp-test', { method: 'POST' }).then(() => toast('Escalation started — check the Logs tab')).catch(e => toast(e.message)); };
+$('#testNotifyBtn').onclick = async () => { toast('Sending tests…'); const r = await api('/api/test-notify', { method: 'POST' }); toast(Object.entries(r).map(([k, v]) => `${k}: ${v ? 'ok' : 'no'}`).join(' · ')); };
+
+// ---- logs ----
+async function loadEvents() {
+  const ev = await api(`/api/events?limit=300&kind=${$('#fKind').value}&level=${$('#fLevel').value}`);
+  $('#eventRows').innerHTML = ev.map(e => `<tr><td class="mono" style="white-space:nowrap">${fmt(e.ts)}</td><td><span class="tag ${e.level}">${e.kind}</span></td><td>${e.level}</td><td>${e.message}${e.data && e.data.results ? '<div class="mono" style="color:var(--muted);margin-top:4px">' + e.data.results.map(r => `${r.centre}: ${r.available ? '<b style="color:var(--ok)">' + r.earliest + '</b>' : (r.error ? 'err' : 'none')}`).join(' · ') + '</div>' : ''}</td><td>${e.screenshot ? `<a href="/screenshots/${e.screenshot}" target="_blank">view</a>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted)">No events yet.</td></tr>';
+  const raw = await api('/api/log'); $('#rawLog').textContent = raw.lines.join('\n'); $('#rawLog').scrollTop = 1e9;
+}
+$('#refreshEvents').onclick = loadEvents; $('#fKind').onchange = loadEvents; $('#fLevel').onchange = loadEvents;
+async function loadShots() {
+  const s = await api('/api/screenshots');
+  $('#shotGrid').innerHTML = s.map(x => `<a href="/screenshots/${x.name}" target="_blank"><img src="/screenshots/${x.name}" loading="lazy"><span>${x.name.replace('.png', '')}</span></a>`).join('') || '<span style="color:var(--muted)">No screenshots yet.</span>';
+}
+
+loadStatus(); setInterval(loadStatus, 5000);
+</script>
+</body>
+</html>
