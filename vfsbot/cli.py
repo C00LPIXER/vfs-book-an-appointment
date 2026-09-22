@@ -14,7 +14,8 @@ from .events import log_event
 from .notify import Notifier
 from .schedule import in_burst_window, in_run_window, next_delay
 from .accounts import AccountPool
-from .watcher import OTP_FILE, Blocked, CoolOff, LoginRequired, OtpRequired, PassportPending, ProxyError, SlotResult, Watcher, short_centre, summarize
+from .watcher import (OTP_FILE, Blocked, CoolOff, LoginRequired, OtpRequired, PassportPending, ProfileInUse,
+                      ProxyError, SlotResult, Watcher, short_centre, summarize)
 
 log = logging.getLogger("vfsbot")
 
@@ -351,6 +352,12 @@ def rotate_loop(cfg: Config, once: bool) -> int:
             _set(st, status="blocked", task=f"{acct.name} blocked — next account in {cfg.rotation.retry_minutes} min",
                  accounts=pool.status())
             delay = cfg.rotation.retry_minutes * 60.0
+        except ProfileInUse as e:
+            log.error("%s", e)
+            log_event("error", str(e), "warn")
+            notifier.error(str(e))
+            _set(st, status="needs_human", task=str(e)[:120], accounts=pool.status())
+            delay = cfg.rotation.retry_minutes * 60.0
         except PassportPending:
             # logged in fine; VFS's one-time passport step needs a human (no cool-off — nothing went wrong)
             _set(st, status="needs_human", task=f"{acct.name}: passport step needs Continue in the browser (or enable auto-continue in Settings)",
@@ -458,7 +465,7 @@ def _sweep_account(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Not
                 return
         try:
             checked = _run_sweep_as(acct, pool, cfg, st, notifier, direct_ip, remaining)
-        except (LoginRequired, Blocked, ProxyError):
+        except (LoginRequired, Blocked, ProxyError, ProfileInUse):
             raise
         except Exception as e:  # noqa: BLE001  (browser/navigation hiccup)
             log.warning("login %d of this rotation failed (%s) — %d centre(s) still to do",

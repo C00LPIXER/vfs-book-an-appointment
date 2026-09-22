@@ -126,6 +126,11 @@ class ProxyError(Exception):
     """The account's proxy is not working / the public IP did not change."""
 
 
+class ProfileInUse(Exception):
+    """This account's browser profile is open in another window (e.g. the one opened by hand from
+    the dashboard). Chrome allows a profile in one process at a time."""
+
+
 BLOCK_RE = re.compile(r'"code"\s*:\s*"403\d*"|access denied|attention required|cloudflare', re.I)
 
 
@@ -190,6 +195,18 @@ class Watcher:
 
     def __enter__(self) -> "Watcher":
         self._pw = sync_playwright().start()
+        try:
+            return self._start()
+        except Exception:
+            # the driver keeps an asyncio loop alive; leaving it running poisons every later
+            # sync_playwright() in this process ("Sync API inside the asyncio loop")
+            try:
+                self._pw.stop()
+            finally:
+                self._pw = None
+            raise
+
+    def _start(self) -> "Watcher":
         profile = Path(self.profile_dir).resolve()
         profile.mkdir(parents=True, exist_ok=True)
         prepare_profile(profile)
@@ -207,6 +224,7 @@ class Watcher:
             log.info("proxy: %s%s", proxy["server"], " (auto tunnel)" if self.account.proxy_auto else "")
         elif self.cfg.rotation.require_proxy:
             raise ProxyError(f"{self.account.name}: no proxy configured and rotation.require_proxy is on")
+        self._release_profile(profile)
         self.ctx = self._pw.chromium.launch_persistent_context(
             str(profile),
             executable_path=exe,
@@ -240,6 +258,32 @@ class Watcher:
             if self._pw:
                 self._pw.stop()
             self._wait_profile_free()
+
+    def _release_profile(self, profile: Path) -> None:
+        """Chrome refuses to open a profile that another process already has. Wait briefly for a
+        closing window to let go, then say clearly what is holding it."""
+        holder = self._profile_holder(profile)
+        if holder is None:
+            return
+        end = time.monotonic() + 15
+        while time.monotonic() < end:
+            time.sleep(1)
+            holder = self._profile_holder(profile)
+            if holder is None:
+                return
+        raise ProfileInUse(f"{Path(profile).name} is open in another browser window (pid {holder}) — "
+                           "close it (it was probably opened from the dashboard) and the bot will use it again")
+
+    @staticmethod
+    def _profile_holder(profile: Path) -> int | None:
+        """PID of the live process holding this profile's lock, or None."""
+        lock = Path(profile) / "SingletonLock"
+        try:
+            pid = int(os.readlink(lock).rsplit("-", 1)[-1])
+            os.kill(pid, 0)
+            return pid
+        except (OSError, ValueError):
+            return None
 
     def _wait_profile_free(self, timeout: float = 20) -> None:
         """Block until Brave has released this profile, so the next login can reuse it."""

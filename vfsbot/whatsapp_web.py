@@ -29,6 +29,16 @@ class WhatsAppWeb:
 
     def __enter__(self) -> "WhatsAppWeb":
         self._pw = sync_playwright().start()
+        try:
+            return self._start()
+        except Exception:
+            try:
+                self._pw.stop()
+            finally:
+                self._pw = None
+            raise
+
+    def _start(self) -> "WhatsAppWeb":
         Path(self.profile_dir).mkdir(parents=True, exist_ok=True)
         prepare_profile(Path(self.profile_dir))
         self.ctx = self._pw.chromium.launch_persistent_context(

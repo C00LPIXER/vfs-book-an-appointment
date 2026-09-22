@@ -54,6 +54,16 @@ class PublicWatcher:
 
     def __enter__(self) -> "PublicWatcher":
         self._pw = sync_playwright().start()
+        try:
+            return self._start()
+        except Exception:
+            try:
+                self._pw.stop()
+            finally:
+                self._pw = None
+            raise
+
+    def _start(self) -> "PublicWatcher":
         profile = Path("public-profile").resolve()
         profile.mkdir(parents=True, exist_ok=True)
         exe = find_browser(self.cfg.browser.executable)
