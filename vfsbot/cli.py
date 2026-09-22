@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import random
 import sys
 import time
 from datetime import datetime, timedelta
@@ -311,7 +312,7 @@ def rotate_loop(cfg: Config, once: bool) -> int:
                     delay = max(60.0, min(cfg.rotation.retry_minutes * 60.0,
                                           (free_at - datetime.now()).total_seconds() + 5 if free_at else 60.0))
                 else:
-                    _run_sweep_as(acct, pool, cfg, st, notifier, direct_ip)
+                    _sweep_account(acct, pool, cfg, st, notifier, direct_ip)
                     consecutive_errors = 0
                     _set(st, accounts=pool.status())
         except ProxyError as e:
@@ -436,8 +437,40 @@ def _live_rows(cfg: Config, live: dict) -> list[dict]:
     return rows
 
 
-def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Notifier, direct_ip: str) -> None:
-    """One full sweep as `acct`: (rotate IP) -> open browser -> verify IP -> login (+OTP) -> check centres -> close."""
+def _sweep_account(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Notifier, direct_ip: str) -> None:
+    """One rotation = one account. VFS answers only ~7 slot checks per login session, so the same
+    account signs in again (up to max_logins_per_sweep) until every enabled centre is covered.
+    The next rotation then moves to the next account."""
+    all_centres = list(cfg.centre_list)
+    start = int(st.get("centre_cursor", 0)) % max(1, len(all_centres))
+    remaining = (all_centres * 2)[start:start + len(all_centres)]      # priority order, oldest first
+    logins = max(1, cfg.max_logins_per_sweep) if cfg.sweep_all_centres else 1
+    for attempt in range(logins):
+        if not remaining:
+            break
+        if attempt:
+            gap = random.uniform(cfg.relogin_gap_seconds * 0.7, cfg.relogin_gap_seconds * 1.3)
+            log.info("%d centre(s) left — signing in again as %s in %.0fs", len(remaining), acct.name, gap)
+            _set(st, status="running", task=f"{len(remaining)} centre(s) left — next login as {acct.name} in {gap / 60:.0f} min")
+            _sleep_keepalive(None, gap, st)
+            if STOP_FILE.exists():
+                return
+        try:
+            checked = _run_sweep_as(acct, pool, cfg, st, notifier, direct_ip, remaining)
+        except LoginRequired:
+            raise
+        remaining = [c for c in remaining if short_centre(c) not in {short_centre(x) for x in checked}]
+        _set(st, centre_cursor=(all_centres.index(remaining[0]) if remaining else 0))
+        if not checked:      # nothing came back (quota gone straight away) — stop wasting logins
+            break
+    if not remaining:
+        log.info("all %d centres checked this rotation by %s", len(all_centres), acct.name)
+
+
+def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Notifier, direct_ip: str,
+                  centres: list[str] | None = None) -> list[str]:
+    """One login as `acct`: (rotate IP) -> browser -> verify IP -> login (+OTP) -> check centres -> close.
+    Returns the centres it managed to check."""
     log.info("sweep as %s (%s)%s", acct.name, acct.email, " via proxy" if acct.proxy else "")
     _set(st, status="running", task=f"opening browser as {acct.name}", account=acct.name,
          account_email=acct.email, ip="", next_run_at=None, next_check_in=None)
@@ -467,9 +500,9 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
             pool.mark_imap(acct, w.imap_error)
         pool.mark_login_ok(acct)
         all_centres = list(cfg.centre_list)
-        per = max(1, min(cfg.login_centres_per_session, len(all_centres)))
-        start = int(st.get("centre_cursor", 0)) % len(all_centres)
-        batch = (all_centres * 2)[start:start + per]          # wrap around the priority list
+        todo = list(centres) if centres is not None else all_centres
+        per = max(1, min(cfg.login_centres_per_session, len(todo)))
+        batch = todo[:per]
         burst = "  [burst]" if in_burst_window(cfg) else ""
         _set(st, status="running", task=f"checking {', '.join(short_centre(c) for c in batch)} as {acct.name}{burst}")
         log.info("checking %d of %d centres as %s (%s)%s", per, len(all_centres), acct.name, ", ".join(short_centre(c) for c in batch), burst)
@@ -502,6 +535,7 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
                             "error": "quota spent — next login"}
                 _set(st, centre_live=_live_rows(cfg, live))
 
+        checked_centres: list[str] = []
         try:
             results = w.check_all(batch, on_progress=progress)
         except LoginRequired as e:
@@ -516,13 +550,15 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
             log_event("login", f"VFS session ended during the sweep ({acct.name}) after {len(done)} centre(s) at {w.url}", "warn",
                       screenshot=w.screenshot("session_ended"))
             if done:   # keep what was checked; the next login continues from the next centre
-                _set(st, centre_cursor=(start + len(done)) % len(all_centres))
                 _handle_results(w, cfg, st, notifier, done, all_centres)
-            raise
-        attempted = [r for r in results if r.source != "skipped"]
-        _set(st, centre_cursor=(start + len(attempted)) % len(all_centres))
-        _handle_results(w, cfg, st, notifier, results, all_centres)
+            checked_centres = [r.centre for r in done]
+            results = None
+        if results is not None:
+            attempted = [r for r in results if r.source != "skipped"]
+            _handle_results(w, cfg, st, notifier, results, all_centres)
+            checked_centres = [r.centre for r in attempted]
     log.info("browser closed (%s)", acct.name)
+    return checked_centres
 
 
 def watch_loop(w: Watcher, cfg: Config, once: bool) -> int:

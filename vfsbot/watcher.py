@@ -779,6 +779,18 @@ class Watcher:
         except Exception:  # noqa: BLE001
             pass
 
+    def _answered_for(self, centre: str) -> bool:
+        """True when the form shows the wanted centre plus a definitive slot answer."""
+        try:
+            if short_centre(self._selected_text(0)).lower() != short_centre(centre).lower():
+                return False
+            if self._last_api is not None:
+                return True
+            text = self.page.locator("body").inner_text(timeout=3000)
+            return bool(NO_SLOT_RE.search(text) or EARLIEST_RE.search(text))
+        except Exception:  # noqa: BLE001
+            return False
+
     def _selected_text(self, index: int) -> str:
         try:
             return self.page.locator("mat-select").nth(index).inner_text(timeout=2000).strip()
@@ -796,7 +808,15 @@ class Watcher:
         for i in range(n):
             # Re-selecting an identical value fires no change event (and no API call), so when the
             # centre is already selected we still re-pick category/sub-category to force a refresh.
-            chosen.append(self._select_option(i, wanted[i]))
+            try:
+                chosen.append(self._select_option(i, wanted[i]))
+            except Exception:  # noqa: BLE001
+                # A dropdown that will not re-open is fine *if* VFS has already answered for this
+                # centre (the form keeps category/sub-category and answers on the centre change).
+                if i >= 1 and self._answered_for(centre):
+                    log.debug("dropdown %d stayed shut but the page already answered for %s", i, centre)
+                    break
+                raise
             if i >= 1 and self._last_api is not None:
                 # category/sub-category were kept from the previous centre and the site already
                 # called CheckIsSlotAvailable for this one — nothing more to pick
