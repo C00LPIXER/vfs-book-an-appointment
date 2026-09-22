@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import re
 import shutil
@@ -237,6 +238,22 @@ class Watcher:
         finally:
             if self._pw:
                 self._pw.stop()
+            self._wait_profile_free()
+
+    def _wait_profile_free(self, timeout: float = 20) -> None:
+        """Block until Brave has released this profile, so the next login can reuse it."""
+        lock = Path(self.profile_dir) / "SingletonLock"
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if not lock.exists():
+                return
+            try:
+                target = os.readlink(lock)                     # "<host>-<pid>"
+                pid = int(target.rsplit("-", 1)[-1])
+                os.kill(pid, 0)                                # still alive?
+            except (OSError, ValueError):
+                return                                         # stale lock or gone
+            time.sleep(0.5)
 
     # ---- helpers ------------------------------------------------------------------
 
@@ -284,6 +301,25 @@ class Watcher:
     @property
     def url(self) -> str:
         return self.page.url if self.page else ""
+
+    def goto(self, url: str, attempts: int = 3) -> None:
+        """Navigate, retrying transient aborts. Chrome reports ERR_ABORTED when a navigation is
+        superseded (the Angular app redirects on load) or when the profile is still settling right
+        after a previous window closed."""
+        last = None
+        for i in range(attempts):
+            try:
+                self._ensure_page()
+                self.page.goto(url, wait_until="domcontentloaded")
+                return
+            except Exception as e:  # noqa: BLE001
+                last = e
+                msg = str(e).splitlines()[0]
+                if "ERR_ABORTED" not in msg and "closed" not in msg and "Timeout" not in msg:
+                    raise
+                log.warning("navigation to %s failed (%s) — retry %d/%d", url.rsplit("/", 1)[-1], msg[-60:], i + 1, attempts)
+                self.page.wait_for_timeout(human.jitter(1500, 4000))
+        raise last  # type: ignore[misc]
 
     def _ensure_page(self) -> None:
         """Re-open a tab if the user closed it (the persistent context keeps the session)."""
@@ -421,7 +457,7 @@ class Watcher:
     def ensure_logged_in(self, wait_minutes: int = 10) -> None:
         """Go to the dashboard. If we land on /login, pre-fill creds and wait for a human
         to clear Cloudflare + press Sign In (or press it ourselves if the check auto-passes)."""
-        self.page.goto(f"{self.cfg.base_url}/dashboard", wait_until="domcontentloaded")
+        self.goto(f"{self.cfg.base_url}/dashboard")
         self._wait_for_spa()
         if not self._spa_rendered():
             log.warning("VFS page is blank — reloading once")
@@ -448,7 +484,7 @@ class Watcher:
         while waited < deadline:
             if self.page.is_closed():
                 self._ensure_page()
-                self.page.goto(f"{self.cfg.base_url}/dashboard", wait_until="domcontentloaded")
+                self.goto(f"{self.cfg.base_url}/dashboard")
                 self._wait_for_spa()
             if self._is_logged_in() or self._on_passport_upload():
                 log.info("Logged in as %s.", self.account.name)
@@ -653,7 +689,7 @@ class Watcher:
                 human.click(self.page, dash.first)   # in-app navigation, no reload
                 human.dwell(self.page, 800, 2200)
             elif "/dashboard" not in self.url:
-                self.page.goto(f"{self.cfg.base_url}/dashboard", wait_until="domcontentloaded")
+                self.goto(f"{self.cfg.base_url}/dashboard")
                 self._wait_for_spa()
             if self._on_login_page():
                 raise LoginRequired(self.url)
@@ -662,7 +698,7 @@ class Watcher:
                 human.nap(self.page, 400, 1800)
                 human.click(self.page, btn.first)
             else:
-                self.page.goto(f"{self.cfg.base_url}/application-detail", wait_until="domcontentloaded")
+                self.goto(f"{self.cfg.base_url}/application-detail")
             human.dwell(self.page, 1200, 3000)
             if self._on_login_page():
                 raise LoginRequired(self.url)

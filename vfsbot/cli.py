@@ -457,8 +457,15 @@ def _sweep_account(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Not
                 return
         try:
             checked = _run_sweep_as(acct, pool, cfg, st, notifier, direct_ip, remaining)
-        except LoginRequired:
+        except (LoginRequired, Blocked, ProxyError):
             raise
+        except Exception as e:  # noqa: BLE001  (browser/navigation hiccup)
+            log.warning("login %d of this rotation failed (%s) — %d centre(s) still to do",
+                        attempt + 1, str(e).splitlines()[0][:100], len(remaining))
+            log_event("error", f"{type(e).__name__} during {acct.name}'s sweep: {str(e).splitlines()[0][:150]}", "warn")
+            if attempt + 1 >= logins:
+                raise
+            continue
         remaining = [c for c in remaining if short_centre(c) not in {short_centre(x) for x in checked}]
         _set(st, centre_cursor=(all_centres.index(remaining[0]) if remaining else 0))
         if not checked:      # nothing came back (quota gone straight away) — stop wasting logins
