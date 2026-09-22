@@ -177,6 +177,7 @@ class Watcher:
         self.imap_error: str = ""
         self.logged_in = False
         self.rate_limited = False
+        self._centre_hint = ""
         self.partial_results: list[SlotResult] = []
         self._pw = None
         self.ctx: BrowserContext | None = None
@@ -719,8 +720,20 @@ class Watcher:
         elif cur and not cur.lower().startswith("select"):
             return cur      # e.g. sub-category kept from the previous centre — the site already re-queried
         last_err: Exception | None = None
-        for attempt in range(4):
+        for attempt in range(5):
             try:
+                if attempt == 3:
+                    # the list will not populate — re-open the booking form so Angular rebuilds it
+                    log.info("re-opening the booking form before the last try at dropdown %d", index)
+                    self.goto(f"{self.cfg.base_url}/application-detail")
+                    self._wait_for_spa()
+                    human.dwell(self.page, 900, 2200)
+                    if self._on_login_page():
+                        raise LoginRequired(self.url)
+                    selects = self.page.locator("mat-select")
+                    options = self.page.locator("mat-option")
+                    if index > 0:              # re-pick the centre first, the form is blank again
+                        self._select_option(0, self._centre_hint or "")
                 selects.nth(index).wait_for(state="visible")
                 self.page.wait_for_timeout(human.jitter(300, 900) + 600 * attempt)
                 human.click(self.page, selects.nth(index))
@@ -757,7 +770,8 @@ class Watcher:
                     self.page.keyboard.press("Escape")
                 except Exception:  # noqa: BLE001
                     pass
-        raise RuntimeError(f"could not choose option for dropdown {index}: {last_err}")
+        what = {0: "the centre list", 1: "the category list", 2: "the sub-category list"}.get(index, f"dropdown {index}")
+        raise RuntimeError(f"{what} did not open: {str(last_err).splitlines()[0][:90]}")
 
     def discover(self) -> dict[str, list[str]]:
         """Print the options of every dropdown on the booking form (helps fill config.yaml)."""
@@ -836,6 +850,7 @@ class Watcher:
     def check(self, centre: str | None = None) -> SlotResult:
         """Fill the booking form for one centre (default: first configured) and report availability."""
         centre = self.cfg.centre_list[0] if centre is None else centre
+        self._centre_hint = centre
         self._last_api = None
         self._open_new_booking()
         wanted = [centre, self.cfg.category, self.cfg.subcategory]
