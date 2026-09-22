@@ -13,7 +13,7 @@ from pathlib import Path
 
 from playwright.sync_api import BrowserContext, Page, TimeoutError as PWTimeout, sync_playwright
 
-from .watcher import NO_RESTORE_ARGS, find_browser, prepare_profile, single_tab
+from .watcher import IGNORE_DEFAULT_ARGS, NO_RESTORE_ARGS, find_browser, prepare_profile, single_tab
 
 log = logging.getLogger("vfsbot.whatsapp")
 WA_URL = "https://web.whatsapp.com/"
@@ -37,7 +37,7 @@ class WhatsAppWeb:
             headless=False,
             no_viewport=True,
             args=NO_RESTORE_ARGS,
-            ignore_default_args=["--enable-automation"],
+            ignore_default_args=IGNORE_DEFAULT_ARGS,
         )
         self.page = single_tab(self.ctx)
         self.page.set_default_timeout(30_000)

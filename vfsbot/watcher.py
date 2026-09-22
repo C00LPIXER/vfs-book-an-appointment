@@ -63,6 +63,9 @@ BROWSER_CANDIDATES = [
 
 NO_RESTORE_ARGS = ["--disable-blink-features=AutomationControlled", "--no-first-run", "--no-default-browser-check",
                    "--disable-session-crashed-bubble", "--hide-crash-restore-bubble"]
+# Playwright disables extensions by default; we keep them so a VPN extension installed in an
+# account's profile (Settings → "Open this account's browser") stays active during the bot's sessions.
+IGNORE_DEFAULT_ARGS = ["--enable-automation", "--disable-extensions", "--disable-component-extensions-with-background-pages"]
 
 
 def prepare_profile(profile: Path) -> None:
@@ -209,11 +212,14 @@ class Watcher:
             no_viewport=True,   # no emulation at all: Cloudflare flags locale/timezone/viewport overrides
             proxy=proxy,
             args=NO_RESTORE_ARGS,
-            ignore_default_args=["--enable-automation"],
+            ignore_default_args=IGNORE_DEFAULT_ARGS,
         )
         self.page = single_tab(self.ctx)
         self.page.set_default_timeout(20_000)
         self.page.on("response", self._on_response)
+        if self.ctx.background_pages or self.ctx.service_workers:
+            log.info("extensions active in this profile: %d", len(self.ctx.background_pages) + len(self.ctx.service_workers))
+            self.page.wait_for_timeout(4000)   # let a VPN extension connect before the first request
         return self
 
     def __exit__(self, *exc) -> None:

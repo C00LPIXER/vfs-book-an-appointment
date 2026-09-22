@@ -304,6 +304,18 @@ def set_accounts(body: AccountsIn):
     return {"ok": True, "count": len(out)}
 
 
+@app.post("/api/accounts/open-browser")
+def open_browser(body: dict):
+    """Open the account's Brave profile with no automation (install / connect a VPN extension)."""
+    email = (body.get("email") or "").strip()
+    if _running("login"):
+        raise HTTPException(409, "stop the login watcher first — it uses these profiles")
+    subprocess.Popen([sys.executable, "-m", "vfsbot.cli", "browser", "--account", email], cwd=ROOT,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    events.log_event("control", f"Opened {email}'s browser profile by hand", "info")
+    return {"ok": True}
+
+
 @app.post("/api/accounts/test-imap")
 def test_imap(body: dict):
     """Try the account's IMAP login (auto-OTP inbox) and report the result."""
@@ -325,7 +337,8 @@ def test_ip(body: dict):
     """Launch a browser through the account's proxy and report the IP it gets (blocks ~10 s)."""
     email = (body.get("email") or "").strip()
     try:
-        r = subprocess.run([sys.executable, "-m", "vfsbot.cli", "ip", "--account", email, "--json"],
+        args = [sys.executable, "-m", "vfsbot.cli", "ip", "--account", email, "--json"] + (["--throwaway"] if _running("login") else [])
+        r = subprocess.run(args,
                            cwd=ROOT, capture_output=True, text=True, timeout=90)
         line = [l for l in r.stdout.splitlines() if l.startswith("[")]
         res = json.loads(line[-1])[0] if line else {"ok": False, "note": (r.stderr or r.stdout)[-200:]}

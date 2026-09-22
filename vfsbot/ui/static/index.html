@@ -180,7 +180,7 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
 <section class="tab" id="tab-settings">
   <div class="settings">
     <div class="card wide"><h3>VFS accounts</h3>
-      <div style="color:var(--muted);font-size:13px">The login watcher rotates through these: every sweep signs in with the least recently used account, through its own proxy (= its own IP) and browser profile, then closes the browser. <b>IMAP</b> = that account's Gmail App Password so the bot reads its own OTP (user defaults to the email). <b>Proxy</b>: <span class="mono">socks5://user:pass@host:port</span> or <span class="mono">http://…</span>; leave empty to use the machine's IP.</div>
+      <div style="color:var(--muted);font-size:13px">The login watcher rotates through these: every sweep signs in with the least recently used account, through its own proxy (= its own IP) and browser profile, then closes the browser. <b>IMAP</b> = that account's Gmail App Password so the bot reads its own OTP (user defaults to the email). <b>Proxy</b>: <span class="mono">socks5://user:pass@host:port</span> or <span class="mono">http://…</span>; leave empty to use the machine's IP. <b>Free VPN extension instead:</b> click <i>Open this account's browser</i>, install a VPN extension from the Chrome Web Store (Urban VPN has a free India location), connect it, close the window — the bot's sessions for that account then run through it (check with <i>Test IP</i>).</div>
       <div id="acctList" style="margin-top:6px"></div>
       <div class="row" style="margin-top:8px"><button class="btn" id="acctAdd">+ Add account</button><button class="btn primary" id="acctSave">Save accounts</button></div>
     </div>
@@ -429,6 +429,7 @@ function acctStatusLine(a) {
   if (s.imap_error) bits.push(`<span class="tag err" title="${esc(s.imap_error)}">OTP inbox login failing</span>`);
   bits.push(`<button class="btn acc-testimap" data-email="${esc(a.email)}">Test IMAP (auto-OTP)</button> <span class="acc-imapres"></span>`);
   bits.push(`<button class="btn acc-testip" data-email="${esc(a.email)}">Test IP through proxy</button> <span class="acc-ipres"></span>`);
+  bits.push(`<button class="btn acc-open" data-email="${esc(a.email)}" title="Opens this account's own Brave profile with no automation. Install a VPN extension there and connect it — it stays active for the bot.">Open this account's browser (VPN extension)</button>`);
   return `<div class="hint" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${bits.map(b => `<span>${b}</span>`).join('<span>·</span>')}</div>`;
 }
 function renderAccounts() {
@@ -446,6 +447,7 @@ function renderAccounts() {
       </div>${acctStatusLine(a)}
     </div>`).join('') || '<div class="mono" style="color:var(--dim)">No accounts yet — click “Add account”.</div>';
   document.querySelectorAll('.acc-del').forEach(b => b.onclick = () => { readAccountInputs(); ACCOUNTS.splice(+b.dataset.del, 1); renderAccounts(); });
+  document.querySelectorAll('.acc-open').forEach(b => b.onclick = async () => { try { await api('/api/accounts/open-browser', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: b.dataset.email }) }); toast('Browser opened — install/connect the VPN extension, then close the window'); } catch (e) { toast(e.message); } });
   document.querySelectorAll('.acc-testimap').forEach(b => b.onclick = async () => {
     const res = b.parentElement.querySelector('.acc-imapres'); res.textContent = 'logging in to the inbox… (uses the SAVED password)'; b.disabled = true;
     try { const r = await api('/api/accounts/test-imap', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: b.dataset.email }) });

@@ -620,7 +620,7 @@ def cmd_earliest(cfg: Config, category: str, as_json: bool, only_available: bool
     return 0
 
 
-def cmd_ip(cfg: Config, email: str, as_json: bool) -> int:
+def cmd_ip(cfg: Config, email: str, as_json: bool, throwaway: bool = False) -> int:
     """Open a browser through each account's proxy and print the public IP it gets (proxy check)."""
     pool = AccountPool()
     accts = [a for a in pool.accounts if not email or a.email == email]
@@ -632,11 +632,17 @@ def cmd_ip(cfg: Config, email: str, as_json: bool) -> int:
     for a in accts:
         rec = {"email": a.email, "name": a.name, "proxy": bool(a.proxy), "direct_ip": direct}
         try:
-            with Watcher(cfg, account=a, profile_dir=f"browser-profile/_iptest") as w:   # never touch the live profile
+            # the account's real profile (so a VPN extension counts) unless a sweep may be using it
+            with Watcher(cfg, account=a, profile_dir="browser-profile/_iptest" if throwaway else "") as w:
                 rec["ip"] = w.check_ip()
+                rec["extensions"] = len(w.ctx.background_pages) + len(w.ctx.service_workers)
             rec["ok"] = bool(rec["ip"]) and (not a.proxy or rec["ip"] != direct)
-            rec["note"] = ("no proxy — machine's own IP" if not a.proxy else
-                           ("LEAK: same as the machine's own IP" if rec["ip"] == direct else "proxy working"))
+            if a.proxy:
+                rec["note"] = "LEAK: same as the machine's own IP" if rec["ip"] == direct else "proxy working"
+            elif rec["ip"] and rec["ip"] != direct:
+                rec["ok"] = True; rec["note"] = "VPN extension / rotation active — differs from the machine's own IP"
+            else:
+                rec["note"] = "no proxy — machine's own IP" + (" (VPN extension installed but not connected?)" if rec.get("extensions") else "")
         except Exception as e:  # noqa: BLE001
             rec["ok"] = False; rec["ip"] = ""; rec["note"] = str(e).splitlines()[0][:160]
         out.append(rec)
@@ -672,6 +678,22 @@ def cmd_proxies(cfg: Config, action: str, email: str, ip: str = "", user: str = 
         for e in proxies.load_proxies():
             print(e, proxies.ensure_tunnel(e))
     return 0
+
+
+def cmd_browser(cfg: Config, email: str) -> int:
+    """Open an account's own Brave profile with no automation, e.g. to install a VPN extension from
+    the Chrome Web Store and connect it. Whatever you set up stays in that profile for the bot."""
+    import subprocess
+    from .accounts import AccountPool
+    from .watcher import NO_RESTORE_ARGS, find_browser, prepare_profile
+    accts = [a for a in AccountPool().accounts if not email or a.email == email]
+    if not accts:
+        print("no such account"); return 1
+    a = accts[0]
+    prof = Path(a.profile_dir).resolve(); prof.mkdir(parents=True, exist_ok=True); prepare_profile(prof)
+    exe = find_browser(cfg.browser.executable)
+    print(f"Opening {a.name}'s profile ({prof.name}). Install/connect the VPN extension, then close the window.")
+    return subprocess.call([exe, f"--user-data-dir={prof}", *NO_RESTORE_ARGS, "chrome://extensions/", "https://chromewebstore.google.com/search/vpn"])
 
 
 def cmd_rotate_ip(cfg: Config) -> int:
@@ -713,9 +735,12 @@ def main(argv: list[str] | None = None) -> int:
     pp.add_argument("--ip", default="", help="attach: your own server's IP")
     pp.add_argument("--user", default="root", help="attach: SSH user on that server (ubuntu / opc / root)")
     sub.add_parser("rotate-ip", help="run the IP rotation command once (phone tethering / VPN) and show before/after")
+    bp = sub.add_parser("browser", help="open an account's browser profile by hand (install / connect a VPN extension)")
+    bp.add_argument("--account", default="", help="account email (default: first)")
     ipp = sub.add_parser("ip", help="show the public IP each account gets through its proxy")
     ipp.add_argument("--account", default="", help="only this account (email)")
     ipp.add_argument("--json", action="store_true")
+    ipp.add_argument("--throwaway", action="store_true", help="use a scratch profile (when the account's own profile is in use)")
     a_ack = sub.add_parser("ack", help="run the WhatsApp escalation manually (message [key])")
     a_ack.add_argument("message"); a_ack.add_argument("key", nargs="?", default="")
     w = sub.add_parser("watch", help="poll for slots and alert")
@@ -750,6 +775,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_escalation(a.message, a.key)
     if a.cmd == "earliest":
         return cmd_earliest(cfg, a.category, a.json, a.available, a.curl)
+    if a.cmd == "browser":
+        return cmd_browser(cfg, a.account)
     if a.cmd == "rotate-ip":
         logging.getLogger().setLevel(logging.WARNING)
         return cmd_rotate_ip(cfg)
@@ -757,7 +784,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_proxies(cfg, a.action, a.account, a.ip, a.user)
     if a.cmd == "ip":
         logging.getLogger().setLevel(logging.WARNING)
-        return cmd_ip(cfg, a.account, a.json)
+        return cmd_ip(cfg, a.account, a.json, a.throwaway)
     return {
         "login": lambda: cmd_login(cfg),
         "discover": lambda: cmd_discover(cfg),
