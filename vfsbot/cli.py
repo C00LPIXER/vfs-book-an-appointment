@@ -14,8 +14,8 @@ from .events import log_event
 from .notify import Notifier
 from .schedule import in_burst_window, in_run_window, next_delay
 from .accounts import AccountPool
-from .watcher import (OTP_FILE, Blocked, CoolOff, LoginRequired, OtpRequired, PassportPending, ProfileInUse,
-                      ProxyError, SlotResult, Watcher, short_centre, summarize)
+from .watcher import (OTP_FILE, Blocked, CoolOff, LoginRequired, NoDisplay, OtpRequired, PassportPending,
+                      ProfileInUse, ProxyError, SlotResult, Watcher, short_centre, summarize)
 
 log = logging.getLogger("vfsbot")
 
@@ -353,6 +353,12 @@ def rotate_loop(cfg: Config, once: bool) -> int:
             _set(st, status="blocked", task=f"{acct.name} blocked — next account in {cfg.rotation.retry_minutes} min",
                  accounts=pool.status())
             delay = cfg.rotation.retry_minutes * 60.0
+        except NoDisplay as e:
+            log.error("%s", e)
+            log_event("error", f"Cannot open a browser: {e}", "error")
+            notifier.error(f"Cannot open a browser: {e}")
+            _set(st, status="needs_human", task=f"cannot open a browser — {str(e)[:100]}", accounts=pool.status())
+            delay = 300.0
         except ProfileInUse as e:
             log.error("%s", e)
             log_event("error", str(e), "warn")
@@ -384,7 +390,7 @@ def rotate_loop(cfg: Config, once: bool) -> int:
             return 0
         except Exception as e:  # noqa: BLE001
             consecutive_errors += 1
-            if "Target page, context or browser has been closed" in str(e):
+            if "Target page, context or browser has been closed" in str(e) and "launch_persistent_context" not in str(e):
                 log.warning("the bot's browser window was closed by hand — retrying in %d min", cfg.rotation.retry_minutes)
                 log_event("error", "Bot browser window was closed by hand — don't close it while a sweep runs; retrying", "warn")
                 _set(st, status="error", task="browser window closed by hand — retrying")
@@ -466,7 +472,7 @@ def _sweep_account(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Not
                 return
         try:
             checked = _run_sweep_as(acct, pool, cfg, st, notifier, direct_ip, remaining)
-        except (LoginRequired, Blocked, ProxyError, ProfileInUse):
+        except (LoginRequired, Blocked, ProxyError, ProfileInUse, NoDisplay):
             raise
         except Exception as e:  # noqa: BLE001  (browser/navigation hiccup)
             log.warning("login %d of this rotation failed (%s) — %d centre(s) still to do",

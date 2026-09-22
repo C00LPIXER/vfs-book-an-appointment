@@ -101,6 +101,59 @@ def single_tab(ctx: BrowserContext) -> Page:
     return page
 
 
+GUI_VARS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS")
+
+
+def ensure_display() -> str:
+    """Brave needs a desktop session. When the bot is started from a service, an ssh shell or any
+    other environment without DISPLAY, Chrome exits the moment it launches ("Target page, context or
+    browser has been closed"). Borrow the graphical session's variables from another process of this
+    user so it works however the bot was started."""
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        _fill_xauthority()
+        return os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY", "")
+    uid = os.getuid()
+    best: dict[str, str] | None = None
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if entry.stat().st_uid != uid:
+                continue
+            raw = (entry / "environ").read_bytes().decode("utf-8", "ignore")
+        except (OSError, PermissionError):
+            continue
+        env = dict(kv.split("=", 1) for kv in raw.split("\0") if "=" in kv)
+        if not (env.get("DISPLAY") or env.get("WAYLAND_DISPLAY")):
+            continue
+        if best is None or (env.get("XAUTHORITY") and not best.get("XAUTHORITY")):
+            best = env
+        if best.get("XAUTHORITY"):      # a complete session: good enough
+            break
+    if best:
+        for k in GUI_VARS:
+            if best.get(k):
+                os.environ[k] = best[k]
+    else:
+        os.environ.setdefault("DISPLAY", ":0")
+    _fill_xauthority()
+    log.info("desktop session: DISPLAY=%s XAUTHORITY=%s", os.environ.get("DISPLAY", "-"), os.environ.get("XAUTHORITY", "-"))
+    return os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY", "")
+
+
+def _fill_xauthority() -> None:
+    """X11 also needs the session's auth cookie; find it when the borrowed environment lacked it."""
+    if os.environ.get("XAUTHORITY") and Path(os.environ["XAUTHORITY"]).exists():
+        return
+    uid = os.getuid()
+    for cand in sorted(Path(f"/run/user/{uid}").glob("xauth_*"), key=lambda f: f.stat().st_mtime, reverse=True):
+        os.environ["XAUTHORITY"] = str(cand)
+        return
+    home_cookie = Path.home() / ".Xauthority"
+    if home_cookie.exists():
+        os.environ["XAUTHORITY"] = str(home_cookie)
+
+
 def find_browser(configured: str = "") -> str | None:
     if configured:
         return configured
@@ -124,6 +177,10 @@ class CoolOff(Blocked):
 
 class ProxyError(Exception):
     """The account's proxy is not working / the public IP did not change."""
+
+
+class NoDisplay(Exception):
+    """No graphical session is available, so a real browser cannot be opened."""
 
 
 class ProfileInUse(Exception):
@@ -194,6 +251,9 @@ class Watcher:
     # ---- lifecycle ----------------------------------------------------------------
 
     def __enter__(self) -> "Watcher":
+        # before the driver starts: the node process (and therefore the browser) inherits this env
+        if not ensure_display() and not self.cfg.browser.headless:
+            raise NoDisplay("no desktop session found — the bot needs a logged-in desktop to open Brave")
         self._pw = sync_playwright().start()
         try:
             return self._start()
@@ -225,7 +285,23 @@ class Watcher:
         elif self.cfg.rotation.require_proxy:
             raise ProxyError(f"{self.account.name}: no proxy configured and rotation.require_proxy is on")
         self._release_profile(profile)
-        self.ctx = self._pw.chromium.launch_persistent_context(
+        try:
+            self.ctx = self._launch(profile, exe, proxy)
+        except Exception as e:  # noqa: BLE001
+            if "Target page, context or browser has been closed" in str(e):
+                raise NoDisplay(f"{Path(exe or 'the browser').name} exited immediately — no usable desktop session "
+                                f"(DISPLAY={os.environ.get('DISPLAY', 'unset')})") from e
+            raise
+        self.page = single_tab(self.ctx)
+        self.page.set_default_timeout(20_000)
+        self.page.on("response", self._on_response)
+        if self.ctx.background_pages or self.ctx.service_workers:
+            log.info("extensions active in this profile: %d", len(self.ctx.background_pages) + len(self.ctx.service_workers))
+            self.page.wait_for_timeout(4000)   # let a VPN extension connect before the first request
+        return self
+
+    def _launch(self, profile: Path, exe: str | None, proxy: dict | None):
+        return self._pw.chromium.launch_persistent_context(
             str(profile),
             executable_path=exe,
             headless=self.cfg.browser.headless,
@@ -234,13 +310,6 @@ class Watcher:
             args=NO_RESTORE_ARGS,
             ignore_default_args=IGNORE_DEFAULT_ARGS,
         )
-        self.page = single_tab(self.ctx)
-        self.page.set_default_timeout(20_000)
-        self.page.on("response", self._on_response)
-        if self.ctx.background_pages or self.ctx.service_workers:
-            log.info("extensions active in this profile: %d", len(self.ctx.background_pages) + len(self.ctx.service_workers))
-            self.page.wait_for_timeout(4000)   # let a VPN extension connect before the first request
-        return self
 
     def __exit__(self, *exc) -> None:
         try:

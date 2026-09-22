@@ -22,7 +22,7 @@ from playwright.sync_api import BrowserContext, Page, sync_playwright
 
 from .config import Config
 from .events import log_event
-from .watcher import Blocked, SlotResult, _fmt_date, find_browser, short_centre
+from .watcher import Blocked, SlotResult, _fmt_date, ensure_display, find_browser, short_centre
 
 log = logging.getLogger("vfsbot.public")
 
@@ -53,6 +53,7 @@ class PublicWatcher:
     # ---- lifecycle ----------------------------------------------------------------
 
     def __enter__(self) -> "PublicWatcher":
+        ensure_display()
         self._pw = sync_playwright().start()
         try:
             return self._start()
