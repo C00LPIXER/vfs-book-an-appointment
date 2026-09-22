@@ -3,7 +3,7 @@ base_url: https://visa.vfsglobal.com/ind/en/bgr
 centre: ''
 centres:
 - name: Cochin
-  enabled: true
+  enabled: false
 - name: Chennai
   enabled: true
 - name: Bangalore
@@ -23,20 +23,24 @@ centres:
 - name: Ahmedabad
   enabled: true
 - name: Jaipur
-  enabled: true
+  enabled: false
 - name: Gurugram
   enabled: true
 - name: New Delhi
   enabled: true
 - name: Chandigarh
-  enabled: true
+  enabled: false
 - name: Jalandhar
-  enabled: true
+  enabled: false
 category: D visa
 subcategory: ''
 centre_pause_seconds: 4.0
+login_centres_per_session: 6
+api_replay: false
 interval_seconds: 2700
 jitter_seconds: 900
+public_interval_seconds: 300
+public_jitter_seconds: 60
 schedule:
   date_from: ''
   date_to: ''
@@ -73,11 +77,11 @@ whatsapp_web:
   enabled: true
   contacts:
   - chat: Aslam 4InDegree OH
-    enabled: false
-    mode: message
+    enabled: true
+    mode: message_call
     bot_issues: false
-    call_attempts: 0
-    ack_keyword: ''
+    call_attempts: 5
+    ack_keyword: ok
   - chat: Shine 4inDegree
     enabled: true
     mode: message_call
@@ -104,11 +108,13 @@ proxy_auto:
   provider: digitalocean
   region: ''
   plan: ''
+ip_rotate:
+  enabled: false
+  command: adb shell svc data disable && sleep 4 && adb shell svc data enable && sleep
+    10
+  require_change: true
+  timeout_seconds: 90
 passport_file: documents/passport_bio.jpg
 passport_auto_continue: false
 passport_wait_minutes: 10
 team: 4indegree · AAI (Anas and Amal Intelligence)
-ip_rotate:
-  enabled: false
-public_interval_seconds: 300
-public_jitter_seconds: 60

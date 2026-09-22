@@ -11,7 +11,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -36,6 +36,58 @@ SHOTS.mkdir(parents=True, exist_ok=True)
 app.mount("/screenshots", StaticFiles(directory=SHOTS), name="screenshots")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
+
+
+# ---- access control -------------------------------------------------------------
+# The dashboard controls the bot and shows account data, so anything reaching it from outside this
+# machine (an ngrok/cloudflared tunnel, the LAN) must authenticate. Requests from 127.0.0.1 are
+# trusted as before, so the local browser needs no password.
+
+AUTH_FILE = Path("data/ui_auth.json")
+
+
+def ui_password(create: bool = True) -> str:
+    """The dashboard password (data/ui_auth.json). Generated on first use."""
+    try:
+        return json.loads(AUTH_FILE.read_text())["password"]
+    except Exception:  # noqa: BLE001
+        if not create:
+            return ""
+        import secrets as _secrets
+        pw = _secrets.token_urlsafe(9)
+        AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        AUTH_FILE.write_text(json.dumps({"user": "vfs", "password": pw}, indent=2))
+        return pw
+
+
+def _is_local(request: Request) -> bool:
+    """Loopback only — and a tunnel (ngrok/cloudflared) also connects from loopback, so a request
+    carrying proxy headers is treated as remote and must authenticate."""
+    host = (request.client.host if request.client else "") or ""
+    if any(h in request.headers for h in ("x-forwarded-for", "x-real-ip", "cf-connecting-ip", "ngrok-skip-browser-warning")):
+        return False
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+@app.middleware("http")
+async def require_password(request: Request, call_next):
+    if _is_local(request):
+        return await call_next(request)
+    import base64
+    import hmac
+    expected = ui_password()
+    header = request.headers.get("authorization", "")
+    ok = False
+    if header.lower().startswith("basic "):
+        try:
+            user, _, pw = base64.b64decode(header.split(" ", 1)[1]).decode().partition(":")
+            ok = user == "vfs" and hmac.compare_digest(pw, expected)
+        except Exception:  # noqa: BLE001
+            ok = False
+    if not ok:
+        return JSONResponse({"detail": "authentication required"}, status_code=401,
+                            headers={"WWW-Authenticate": 'Basic realm="VFS Slot Watcher"'})
+    return await call_next(request)
 
 
 # ---- process control (two instances: public + login) ----------------------------
@@ -526,6 +578,8 @@ def list_shots(limit: int = 50):
 
 
 def run(host: str = "127.0.0.1", port: int = 8787) -> int:
+    if host not in ("127.0.0.1", "localhost"):
+        print(f"Reachable from other devices — sign in with user 'vfs' / password: {ui_password()}")
     import uvicorn
 
     print(f"VFS Slot Watcher web tool: http://{host}:{port}")
