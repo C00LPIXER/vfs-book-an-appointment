@@ -455,6 +455,33 @@ def cmd_earliest(cfg: Config, category: str, as_json: bool, only_available: bool
     return 0
 
 
+def cmd_ip(cfg: Config, email: str, as_json: bool) -> int:
+    """Open a browser through each account's proxy and print the public IP it gets (proxy check)."""
+    pool = AccountPool()
+    accts = [a for a in pool.accounts if not email or a.email == email]
+    if not accts:
+        print(json.dumps({"error": "no such account"}) if as_json else "no such account")
+        return 1
+    direct = _direct_ip(cfg.rotation.ip_check_url)
+    out = []
+    for a in accts:
+        rec = {"email": a.email, "name": a.name, "proxy": bool(a.proxy), "direct_ip": direct}
+        try:
+            with Watcher(cfg, account=a) as w:
+                rec["ip"] = w.check_ip()
+            rec["ok"] = bool(rec["ip"]) and (not a.proxy or rec["ip"] != direct)
+            rec["note"] = ("no proxy — machine's own IP" if not a.proxy else
+                           ("LEAK: same as the machine's own IP" if rec["ip"] == direct else "proxy working"))
+        except Exception as e:  # noqa: BLE001
+            rec["ok"] = False; rec["ip"] = ""; rec["note"] = str(e).splitlines()[0][:160]
+        out.append(rec)
+        if not as_json:
+            print(f"{a.name:12s} {rec.get('ip') or '-':18s} {rec['note']}")
+    if as_json:
+        print(json.dumps(out))
+    return 0 if all(r["ok"] for r in out) else 1
+
+
 def cmd_test_notify(cfg: Config) -> int:
     for k, v in Notifier(cfg.notify).test_all().items():
         print(f"{k:9s}: {'sent' if v else 'not configured / failed'}")
@@ -475,6 +502,9 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--json", action="store_true", help="print the raw JSON response")
     e.add_argument("--curl", action="store_true", help="print the full curl command (all headers + cookies)")
     sub.add_parser("whatsapp-setup", help="open WhatsApp Web once to link it (QR scan)")
+    ipp = sub.add_parser("ip", help="show the public IP each account gets through its proxy")
+    ipp.add_argument("--account", default="", help="only this account (email)")
+    ipp.add_argument("--json", action="store_true")
     a_ack = sub.add_parser("ack", help="run the WhatsApp escalation manually (message [key])")
     a_ack.add_argument("message"); a_ack.add_argument("key", nargs="?", default="")
     w = sub.add_parser("watch", help="poll for slots and alert")
@@ -509,6 +539,9 @@ def main(argv: list[str] | None = None) -> int:
         return run_escalation(a.message, a.key)
     if a.cmd == "earliest":
         return cmd_earliest(cfg, a.category, a.json, a.available, a.curl)
+    if a.cmd == "ip":
+        logging.getLogger().setLevel(logging.WARNING)
+        return cmd_ip(cfg, a.account, a.json)
     return {
         "login": lambda: cmd_login(cfg),
         "discover": lambda: cmd_discover(cfg),

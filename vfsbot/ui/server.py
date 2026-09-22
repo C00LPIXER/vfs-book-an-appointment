@@ -302,6 +302,21 @@ def set_accounts(body: AccountsIn):
     return {"ok": True, "count": len(out)}
 
 
+@app.post("/api/accounts/test-ip")
+def test_ip(body: dict):
+    """Launch a browser through the account's proxy and report the IP it gets (blocks ~10 s)."""
+    email = (body.get("email") or "").strip()
+    try:
+        r = subprocess.run([sys.executable, "-m", "vfsbot.cli", "ip", "--account", email, "--json"],
+                           cwd=ROOT, capture_output=True, text=True, timeout=90)
+        line = [l for l in r.stdout.splitlines() if l.startswith("[")]
+        res = json.loads(line[-1])[0] if line else {"ok": False, "note": (r.stderr or r.stdout)[-200:]}
+    except subprocess.TimeoutExpired:
+        res = {"ok": False, "note": "timed out (proxy not answering?)"}
+    events.log_event("control", f"Proxy test for {email}: {res.get('ip') or '-'} — {res.get('note')}", "info" if res.get("ok") else "warn")
+    return res
+
+
 @app.post("/api/accounts/clear-cooloff")
 def clear_cooloff(body: dict):
     pool = AccountPool()

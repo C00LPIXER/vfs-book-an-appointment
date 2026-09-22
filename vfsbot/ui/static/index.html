@@ -386,7 +386,8 @@ function acctStatusLine(a) {
   bits.push(s.logins ? `${s.logins} login(s), last ${fmt(s.last_login_at)}` : 'never logged in');
   if (s.last_ip) bits.push('ip ' + s.last_ip);
   if (s.cooldown_until) bits.push(`<span class="tag err">cool-off until ${fmt(s.cooldown_until)}</span> ${esc(s.last_error || '')} <button class="btn acc-clear" data-clear="${esc(a.email)}">clear</button>`);
-  return `<div class="hint">${bits.join('  ·  ')}</div>`;
+  bits.push(`<button class="btn acc-testip" data-email="${esc(a.email)}">Test IP through proxy</button> <span class="acc-ipres"></span>`);
+  return `<div class="hint" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${bits.map(b => `<span>${b}</span>`).join('<span>·</span>')}</div>`;
 }
 function renderAccounts() {
   $('#acctList').innerHTML = ACCOUNTS.map((a, i) => `
@@ -403,6 +404,11 @@ function renderAccounts() {
       </div>${acctStatusLine(a)}
     </div>`).join('') || '<div class="mono" style="color:var(--dim)">No accounts yet — click “Add account”.</div>';
   document.querySelectorAll('.acc-del').forEach(b => b.onclick = () => { readAccountInputs(); ACCOUNTS.splice(+b.dataset.del, 1); renderAccounts(); });
+  document.querySelectorAll('.acc-testip').forEach(b => b.onclick = async () => {
+    const res = b.parentElement.querySelector('.acc-ipres'); res.textContent = 'opening browser through the proxy… (uses the SAVED proxy)'; b.disabled = true;
+    try { const r = await api('/api/accounts/test-ip', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: b.dataset.email }) });
+      res.innerHTML = `<span class="tag ${r.ok ? 'ok' : 'err'}">${r.ip || 'no IP'}</span> ${esc(r.note || '')}` + (r.direct_ip ? ` (machine's own IP: ${r.direct_ip})` : ''); }
+    catch (e) { res.textContent = 'failed: ' + e.message; } finally { b.disabled = false; } });
   document.querySelectorAll('.acc-clear').forEach(b => b.onclick = async () => { await api('/api/accounts/clear-cooloff', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: b.dataset.clear }) }); toast('Cool-off cleared'); loadAccounts(); });
 }
 function readAccountInputs() {
