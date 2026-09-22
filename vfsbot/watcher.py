@@ -698,12 +698,21 @@ class Watcher:
                     choice = match[0]
                 else:
                     choice = real[0] if real else texts[0]
-                human.click(self.page, options.get_by_text(choice, exact=True).first, timeout=5000)
+                opt = options.get_by_text(choice, exact=True).first
+                opt.wait_for(state="visible", timeout=5000)
+                box = opt.bounding_box()
+                if box:                       # drift the pointer there like a person would...
+                    human.move_to(self.page, box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5)
+                    human.nap(self.page, 80, 300)
+                opt.click(timeout=5000)       # ...but let Playwright click: it waits for the list to stop animating
                 human.nap(self.page, 1100, 2600)   # site reloads the next dropdown / slot info from the API
+                got = self._selected_text(index)
+                if wanted and got and wanted.lower() not in got.lower():
+                    raise ValueError(f"picked '{got}' instead of '{choice}'")   # neighbour got clicked — retry
                 return choice
             except RuntimeError:
                 raise
-            except Exception as e:  # noqa: BLE001  (option panel re-rendered, detached, etc.)
+            except Exception as e:  # noqa: BLE001  (option panel re-rendered, detached, wrong neighbour, etc.)
                 last_err = e
                 log.debug("select %d attempt %d failed: %s", index, attempt, str(e).splitlines()[0])
                 try:
