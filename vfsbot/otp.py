@@ -13,13 +13,37 @@ OTP_RE = re.compile(r"OTP for your application with VFS Global is\s*(\d{6})", re
 SENDER_HINT = "vfshelpline"
 
 
+class ImapAuthError(Exception):
+    """The inbox rejected the credentials (wrong/revoked App Password, IMAP disabled)."""
+
+
+def test_imap_login(host: str, user: str, password: str) -> tuple[bool, str]:
+    """Try to log in and open INBOX; returns (ok, message)."""
+    if not (host and user and password):
+        return False, "IMAP user or App Password missing"
+    try:
+        m = imaplib.IMAP4_SSL(host, timeout=20)
+        m.login(user, password)
+        typ, data = m.select("INBOX", readonly=True)
+        m.logout()
+        return True, f"login OK — {data[0].decode() if data and data[0] else '?'} messages in INBOX"
+    except imaplib.IMAP4.error as e:
+        return False, f"login rejected: {e}"
+    except Exception as e:  # noqa: BLE001
+        return False, f"{type(e).__name__}: {e}"
+
+
 def fetch_latest_otp(host: str, user: str, password: str, not_before: datetime, mailbox: str = "INBOX") -> str | None:
-    """Return the newest 6-digit VFS OTP received after `not_before`, or None."""
+    """Return the newest 6-digit VFS OTP received after `not_before`, or None.
+    Raises ImapAuthError when the inbox rejects the credentials."""
     if not (host and user and password):
         return None
     try:
-        m = imaplib.IMAP4_SSL(host)
-        m.login(user, password)
+        m = imaplib.IMAP4_SSL(host, timeout=20)
+        try:
+            m.login(user, password)
+        except imaplib.IMAP4.error as e:
+            raise ImapAuthError(str(e)) from e
         m.select(mailbox, readonly=True)
         since = (not_before - timedelta(days=1)).strftime("%d-%b-%Y")
         typ, data = m.search(None, f'(SINCE {since} FROM "{SENDER_HINT}")')
@@ -44,6 +68,8 @@ def fetch_latest_otp(host: str, user: str, password: str, not_before: datetime, 
                 best = (when, mo.group(1))
         m.logout()
         return best[1] if best else None
+    except ImapAuthError:
+        raise
     except Exception as e:  # noqa: BLE001
         log.warning("IMAP OTP fetch failed: %s", e)
         return None

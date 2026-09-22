@@ -24,7 +24,7 @@ from playwright.sync_api import BrowserContext, Page, Response, TimeoutError as 
 from .accounts import Account, AccountPool
 from .config import Config
 from .events import log_event
-from .otp import fetch_latest_otp
+from .otp import ImapAuthError, fetch_latest_otp
 
 log = logging.getLogger("vfsbot.watcher")
 
@@ -128,6 +128,7 @@ class Watcher:
         self.account = account
         self.profile_dir = account.profile_dir
         self.public_ip: str = ""
+        self.imap_error: str = ""
         self._pw = None
         self.ctx: BrowserContext | None = None
         self.page: Page | None = None
@@ -333,6 +334,7 @@ class Watcher:
         waited = 0
         clicked = False
         otp_announced = False
+        imap_broken = False
         while waited < deadline:
             if self.page.is_closed():
                 self._ensure_page()
@@ -352,9 +354,19 @@ class Watcher:
                     otp_announced = True
                     otp_asked_at = datetime.now().astimezone()
                     self.on_otp_required()
-                if not self._try_submit_otp() and waited % 10_000 == 0 and self.account.imap_password:
-                    code = fetch_latest_otp(self.account.imap_host, self.account.imap_login,
-                                            self.account.imap_password, not_before=otp_asked_at)
+                if not self._try_submit_otp() and waited % 10_000 == 0 and self.account.imap_password and not imap_broken:
+                    try:
+                        code = fetch_latest_otp(self.account.imap_host, self.account.imap_login,
+                                                self.account.imap_password, not_before=otp_asked_at)
+                    except ImapAuthError as e:
+                        imap_broken = True   # don't hammer Google with a bad password; a human must fix it
+                        msg = (f"OTP inbox login FAILED for {self.account.name} ({self.account.imap_login}): {e} — "
+                               "fix the Gmail App Password on the Settings tab (or type the OTP in the dashboard)")
+                        log.error(msg)
+                        log_event("otp", msg, "error")
+                        self.imap_error = str(e)[:160]
+                        self.on_human_needed(msg)
+                        code = None
                     if code:
                         OTP_FILE.parent.mkdir(parents=True, exist_ok=True)
                         OTP_FILE.write_text(code)

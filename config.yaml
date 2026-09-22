@@ -73,9 +73,9 @@ whatsapp_web:
   enabled: true
   contacts:
   - chat: Aslam 4InDegree OH
-    enabled: true
+    enabled: false
     mode: message
-    bot_issues: true
+    bot_issues: false
     call_attempts: 0
     ack_keyword: ''
   - chat: Shine 4inDegree
@@ -99,5 +99,10 @@ rotation:
   verify_ip: true
   require_proxy: false
   ip_check_url: https://api.ipify.org?format=json
+proxy_auto:
+  enabled: false
+  provider: digitalocean
+  region: ''
+  plan: ''
 passport_file: documents/passport_bio.jpg
 team: 4indegree · AAI (Anas and Amal Intelligence)

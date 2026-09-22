@@ -297,7 +297,10 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
             _set(st, ip=ip)
         pool.mark_used(acct, w.public_ip)
         _set(st, last_account_email=acct.email, last_ip=w.public_ip, task=f"logging in as {acct.name}")
-        w.ensure_logged_in(wait_minutes=cfg.rotation.login_wait_minutes)
+        try:
+            w.ensure_logged_in(wait_minutes=cfg.rotation.login_wait_minutes)
+        finally:
+            pool.mark_imap(acct, w.imap_error)
         pool.mark_login_ok(acct)
         n = len(cfg.centre_list)
         burst = "  [burst]" if in_burst_window(cfg) else ""

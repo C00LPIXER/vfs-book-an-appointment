@@ -285,6 +285,7 @@ def set_accounts(body: AccountsIn):
         imap_pw = a.get("imap_password") or ""
         if imap_pw == MASK:
             imap_pw = cur.get("imap_password", "")
+        imap_pw = imap_pw.replace(" ", "")   # Google shows App Passwords as "abcd efgh ijkl mnop"
         proxy = (a.get("proxy") or "").strip()
         if MASK in proxy:
             proxy = cur.get("proxy", "")
@@ -301,6 +302,22 @@ def set_accounts(body: AccountsIn):
     save_raw_accounts(out)
     events.log_event("control", f"Saved {len(out)} account(s): " + ", ".join(o["label"] or o["email"] for o in out), "info")
     return {"ok": True, "count": len(out)}
+
+
+@app.post("/api/accounts/test-imap")
+def test_imap(body: dict):
+    """Try the account's IMAP login (auto-OTP inbox) and report the result."""
+    from ..accounts import Account, load_raw_accounts
+    from ..otp import test_imap_login
+    email = (body.get("email") or "").strip()
+    raw = next((a for a in load_raw_accounts() if a.get("email") == email), None)
+    if not raw:
+        raise HTTPException(404, "no such account")
+    a = Account.from_dict(raw)
+    ok, msg = test_imap_login(a.imap_host, a.imap_login, a.imap_password)
+    pool = AccountPool(); pool.mark_imap(a, "" if ok else msg)
+    events.log_event("otp", f"IMAP test for {a.name} ({a.imap_login}): {msg}", "info" if ok else "warn")
+    return {"ok": ok, "message": msg, "user": a.imap_login}
 
 
 @app.post("/api/accounts/test-ip")

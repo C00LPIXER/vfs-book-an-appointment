@@ -181,6 +181,14 @@ class AccountPool:
         save_state(self.state)
         return until
 
+    def mark_imap(self, a: Account, error: str) -> None:
+        r = self._rec(a.email)
+        if error:
+            r["imap_error"] = error[:160]
+        else:
+            r.pop("imap_error", None)
+        save_state(self.state)
+
     def clear_cooloff(self, email: str) -> None:
         self._rec(email).pop("cooldown_until", None)
         save_state(self.state)
@@ -197,6 +205,7 @@ class AccountPool:
                 "last_used_at": r.get("last_used_at"), "last_login_at": r.get("last_login_at"),
                 "last_ip": r.get("last_ip"), "logins": r.get("logins", 0), "fails": r.get("fails", 0),
                 "cooldown_until": cu.isoformat(timespec="seconds") if cu else None,
+                "imap_error": r.get("imap_error"),
                 "last_error": r.get("last_error"),
             })
         return out
