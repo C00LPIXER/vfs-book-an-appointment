@@ -445,6 +445,7 @@ def _sweep_account(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Not
     start = int(st.get("centre_cursor", 0)) % max(1, len(all_centres))
     remaining = (all_centres * 2)[start:start + len(all_centres)]      # priority order, oldest first
     logins = max(1, cfg.max_logins_per_sweep) if cfg.sweep_all_centres else 1
+    empty_in_a_row = 0
     for attempt in range(logins):
         if not remaining:
             break
@@ -468,10 +469,18 @@ def _sweep_account(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Not
             continue
         remaining = [c for c in remaining if short_centre(c) not in {short_centre(x) for x in checked}]
         _set(st, centre_cursor=(all_centres.index(remaining[0]) if remaining else 0))
-        if not checked:      # nothing came back (quota gone straight away) — stop wasting logins
+        # VFS ends a session after a handful of checks, so a rotation keeps signing in with the SAME
+        # account until every centre is covered. Only give up when two logins in a row return nothing.
+        empty_in_a_row = empty_in_a_row + 1 if not checked else 0
+        if empty_in_a_row >= 2:
+            log.warning("two logins in a row checked nothing — leaving %d centre(s) for %s's next rotation", len(remaining), acct.name)
             break
     if not remaining:
         log.info("all %d centres checked this rotation by %s", len(all_centres), acct.name)
+        log_event("check", f"Rotation complete — all {len(all_centres)} centres checked by {acct.name}", "info")
+    else:
+        log.warning("rotation ended with %d centre(s) unchecked (%s) — they go first next rotation",
+                    len(remaining), ", ".join(short_centre(c) for c in remaining))
 
 
 def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Notifier, direct_ip: str,

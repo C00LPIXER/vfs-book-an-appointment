@@ -129,7 +129,7 @@ class Config(BaseModel):
     # login checks this many centres and the next login continues round the priority list.
     login_centres_per_session: int = 6   # VFS answers ~7 slot checks per login session, then 429s
     sweep_all_centres: bool = True       # one rotation = one account covers every enabled centre,
-    max_logins_per_sweep: int = 3        #   signing in again (same account) when the quota runs out
+    max_logins_per_sweep: int = 8        #   signing in again (same account) until every centre is done
     relogin_gap_seconds: int = 120       #   with this gap (randomised) between those logins
     api_replay: bool = False   # replaying the SPA's API call directly gets 401 (per-request signed header); keep off
     interval_seconds: int = 300          # login mode: one login per this interval

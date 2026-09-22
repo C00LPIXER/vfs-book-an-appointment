@@ -118,3 +118,6 @@ passport_file: documents/passport_bio.jpg
 passport_auto_continue: false
 passport_wait_minutes: 10
 team: 4indegree · AAI (Anas and Amal Intelligence)
+max_logins_per_sweep: 8
+sweep_all_centres: true
+relogin_gap_seconds: 120
