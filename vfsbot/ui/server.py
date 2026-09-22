@@ -17,8 +17,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import events
-from ..config import ALL_CENTRES, KNOWN_CATEGORIES, Config, Secrets
-from ..notify import Notifier
+from ..accounts import AccountPool, load_raw_accounts, save_raw_accounts
+from ..config import ALL_CENTRES, KNOWN_CATEGORIES, Config
 from ..watcher import OTP_FILE, find_browser
 
 ROOT = Path(".").resolve()
@@ -36,7 +36,6 @@ SHOTS.mkdir(parents=True, exist_ok=True)
 app.mount("/screenshots", StaticFiles(directory=SHOTS), name="screenshots")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
-SECRET_KEYS = {"vfs_password", "imap_password", "smtp_password", "twilio_auth_token", "telegram_bot_token"}
 
 
 # ---- process control (two instances: public + login) ----------------------------
@@ -171,6 +170,7 @@ def status():
         "running": pub["running"], "paused": pub["paused"], "state": pub["state"],
         "otp_pending": insts["login"]["otp_pending"],
         "instances": insts,
+        "accounts": AccountPool().status(),
         "browser": find_browser(cfg.browser.executable),
         "team": cfg.team, "counts_today": events.counts_today(),
         "now": datetime.now().isoformat(timespec="seconds"),
@@ -224,41 +224,22 @@ def otp(o: Otp):
 @app.get("/api/config")
 def get_config():
     cfg = Config.load()
-    sec = Secrets().model_dump()
-    masked = {k: ("••••••" if (k in SECRET_KEYS and v) else v) for k, v in sec.items()}
-    return {"config": cfg.model_dump(mode="json"), "secrets": masked,
-            "all_centres": ALL_CENTRES, "categories": KNOWN_CATEGORIES}
+    return {"config": cfg.model_dump(mode="json"), "all_centres": ALL_CENTRES, "categories": KNOWN_CATEGORIES}
 
 
 class ConfigIn(BaseModel):
     config: dict
-    secrets: dict
 
 
 @app.post("/api/config")
 def set_config(body: ConfigIn):
     cfg = Config.model_validate(body.config)
     cfg.save()
-    current = Secrets().model_dump()
-    for k, v in body.secrets.items():
-        if k in current and v != "••••••":
-            current[k] = v
-    Secrets.model_validate(current).save()
     events.log_event("control", "Settings saved", "info")
     return {"ok": True}
 
 
-ACCOUNTS_FILE = STATE / "accounts.json"
-
-
-def _load_accounts() -> list:
-    if ACCOUNTS_FILE.exists():
-        try:
-            return json.loads(ACCOUNTS_FILE.read_text())
-        except Exception:  # noqa: BLE001
-            return []
-    return []
-
+# ---- accounts (data/accounts.json — passwords never leave the server unmasked) ----------
 
 MASK = "••••••"
 
@@ -270,16 +251,15 @@ def _mask_proxy(p: str) -> str:
 
 @app.get("/api/accounts")
 def get_accounts():
-    from ..accounts import AccountPool
-    pool = AccountPool()
-    stat = {s["email"]: s for s in pool.status()}
-    return [{"label": a.get("label", ""), "email": a.get("email", ""),
+    stat = {s["email"]: s for s in AccountPool().status()}
+    return [{"label": a.get("label", ""), "email": a.get("email", ""), "orig_email": a.get("email", ""),
              "password": MASK if a.get("password") else "",
+             "imap_host": a.get("imap_host") or "imap.gmail.com",
              "imap_user": a.get("imap_user", ""),
              "imap_password": MASK if a.get("imap_password") else "",
              "proxy": _mask_proxy(a.get("proxy", "")),
              "enabled": bool(a.get("enabled", True)),
-             "status": stat.get(a.get("email", ""), {})} for a in _load_accounts()]
+             "status": stat.get(a.get("email", ""), {})} for a in load_raw_accounts()]
 
 
 class AccountsIn(BaseModel):
@@ -288,38 +268,42 @@ class AccountsIn(BaseModel):
 
 @app.post("/api/accounts")
 def set_accounts(body: AccountsIn):
-    current = {a.get("email"): a for a in _load_accounts()}
-    out = []
+    # Masked fields mean "unchanged": look the stored record up by the email the row was LOADED
+    # with (orig_email), so editing the email doesn't lose or corrupt the stored secrets.
+    current = {a.get("email"): a for a in load_raw_accounts()}
+    out, errors = [], []
     for a in body.accounts:
         email = (a.get("email") or "").strip()
         if not email:
             continue
-        cur = current.get(email, {})
+        cur = current.get((a.get("orig_email") or "").strip()) or current.get(email) or {}
         pw = a.get("password") or ""
-        if pw == MASK:                # unchanged -> keep stored value
+        if pw == MASK:
             pw = cur.get("password", "")
+        if not pw:
+            errors.append(f"{email}: VFS password is empty")
         imap_pw = a.get("imap_password") or ""
         if imap_pw == MASK:
             imap_pw = cur.get("imap_password", "")
         proxy = (a.get("proxy") or "").strip()
-        if MASK in proxy:             # masked proxy password -> keep the stored proxy
+        if MASK in proxy:
             proxy = cur.get("proxy", "")
+        if any(o["email"] == email for o in out):
+            errors.append(f"{email}: listed twice")
+            continue
         out.append({"label": (a.get("label") or "").strip(), "email": email, "password": pw,
+                    "imap_host": (a.get("imap_host") or "imap.gmail.com").strip(),
                     "imap_user": (a.get("imap_user") or "").strip(), "imap_password": imap_pw,
                     "proxy": proxy, "enabled": bool(a.get("enabled", True))})
-    ACCOUNTS_FILE.write_text(json.dumps(out, indent=2))
-    # mirror the FIRST account into the main VFS creds (used by the login watcher)
-    if out:
-        cur = Secrets().model_dump()
-        cur["vfs_email"] = out[0]["email"]; cur["vfs_password"] = out[0]["password"]
-        Secrets.model_validate(cur).save()
-    events.log_event("control", f"Saved {len(out)} account(s)", "info")
+    if errors:
+        raise HTTPException(400, "; ".join(errors))
+    save_raw_accounts(out)
+    events.log_event("control", f"Saved {len(out)} account(s): " + ", ".join(o["label"] or o["email"] for o in out), "info")
     return {"ok": True, "count": len(out)}
 
 
 @app.post("/api/accounts/clear-cooloff")
 def clear_cooloff(body: dict):
-    from ..accounts import AccountPool
     pool = AccountPool()
     pool.clear_cooloff((body.get("email") or "").strip())
     events.log_event("control", f"Cool-off cleared for {body.get('email')}", "info")
@@ -364,25 +348,24 @@ def raw_log(lines: int = 300):
     return {"lines": data[-lines:]}
 
 
-@app.post("/api/test-notify")
-def test_notify():
-    cfg = Config.load()
-    res = Notifier(cfg.notify, Secrets()).test_all()
-    events.log_event("alert", "Test notifications: " + ", ".join(f"{k}={'ok' if v else 'no'}" for k, v in res.items()), "info")
-    return res
+class WaTest(BaseModel):
+    kind: str = "slot"      # "slot" = full escalation to every contact (messages + calls) | "notice" = bot-issue contacts only
 
 
 @app.post("/api/whatsapp-test")
-def whatsapp_test():
+def whatsapp_test(body: WaTest):
     import subprocess
     cfg = Config.load()
-    msg = ("\U0001F9EA VFS bot escalation TEST\nCentre: Cochin\nEarliest: 23-09-2026\n"
-           "Category: " + cfg.category + "\n\nThis is a test of the slot-alert escalation. Reply "
-           + f"'{cfg.whatsapp_web.ack_keyword}' to stop the calls.")
+    if body.kind == "notice":
+        args = ["notice", "\u2705 VFS bot test notice — you are set to receive bot issues (OTP / needs human / errors)."]
+    else:
+        args = ["slot", ("\U0001F9EA VFS bot escalation TEST\nCentre: Cochin\nEarliest: 23-09-2026\n"
+                         "Category: " + cfg.category + "\n\nThis is a test of the slot alert. Reply "
+                         + f"'{cfg.whatsapp_web.ack_keyword}' to stop the calls."), "TEST"]
     log = open(STATE / "ack.out", "a")
-    subprocess.Popen([sys.executable, "-m", "vfsbot.ack", msg, "TEST"], cwd=ROOT, stdout=log,
+    subprocess.Popen([sys.executable, "-m", "vfsbot.ack", *args], cwd=ROOT, stdout=log,
                      stderr=subprocess.STDOUT, start_new_session=True)
-    events.log_event("ack", "WhatsApp escalation test started from web tool", "info")
+    events.log_event("ack", f"WhatsApp {body.kind} test started from web tool", "info")
     return {"ok": True}
 
 

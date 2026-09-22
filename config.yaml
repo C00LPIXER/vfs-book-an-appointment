@@ -60,10 +60,6 @@ burst:
   interval_seconds: 45
   timezone: Asia/Kolkata
 notify:
-  telegram: true
-  email: true
-  call: true
-  whatsapp: false
   cooldown_minutes: 30
   heartbeat_hours: 6
   alert_top_n: 0
@@ -75,11 +71,33 @@ browser:
   executable: ''
 whatsapp_web:
   enabled: true
-  chat: Aslam 4InDegree OH
+  contacts:
+  - chat: Aslam 4InDegree OH
+    enabled: true
+    mode: message
+    bot_issues: true
+    call_attempts: 0
+    ack_keyword: ''
+  - chat: Shine 4inDegree
+    enabled: true
+    mode: message_call
+    bot_issues: true
+    call_attempts: 3
+    ack_keyword: Ok
   ack_keyword: ok
   call_attempts: 3
   call_interval_seconds: 120
   ring_seconds: 25
+  stop_all_on_first_ack: true
   profile_dir: whatsapp-profile
+  chat: ''
+rotation:
+  enabled: true
+  login_wait_minutes: 3
+  cooloff_hours: 2.0
+  retry_minutes: 5
+  verify_ip: true
+  require_proxy: false
+  ip_check_url: https://api.ipify.org?format=json
 passport_file: documents/passport_bio.jpg
 team: 4indegree · AAI (Anas and Amal Intelligence)

@@ -1,8 +1,8 @@
 """Drive an already-linked WhatsApp Web session in a dedicated Brave/Chrome profile:
 send a message to a contact, place a voice call, and read their reply.
 
-Link once:  vfsbot whatsapp-setup   (opens WhatsApp Web; scan the QR with Aslam's... no —
-with YOUR phone: WhatsApp > Linked devices > Link a device). The link persists in the profile.
+Link once:  vfsbot whatsapp-setup   (opens WhatsApp Web; scan the QR with the office phone:
+WhatsApp > Linked devices > Link a device). The link persists in the profile.
 """
 from __future__ import annotations
 
@@ -208,18 +208,22 @@ class WhatsAppWeb:
         except Exception:  # noqa: BLE001
             return ""
 
+    def has_new_reply(self, baseline: int, keyword: str) -> bool:
+        """True if the open chat has more incoming messages than `baseline` and the newest one
+        contains `keyword` (case-insensitive)."""
+        return self.incoming_count() > baseline and bool(re.search(re.escape(keyword), self.latest_incoming_text(), re.I))
+
     def wait_for_reply(self, keyword: str, timeout_seconds: int) -> bool:
         """Return True if a NEW incoming message matching `keyword` arrives within the timeout."""
-        pat = re.compile(re.escape(keyword), re.I)
-        baseline = self._incoming_count()
+        baseline = self.incoming_count()
         end = time.time() + timeout_seconds
         while time.time() < end:
             self.page.wait_for_timeout(3000)
-            if self._incoming_count() > baseline and pat.search(self.latest_incoming_text()):
+            if self.has_new_reply(baseline, keyword):
                 return True
         return False
 
-    def _incoming_count(self) -> int:
+    def incoming_count(self) -> int:
         try:
             return self.page.locator("div.message-in").count()
         except Exception:  # noqa: BLE001

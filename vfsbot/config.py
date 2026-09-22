@@ -5,10 +5,8 @@ from typing import Union
 
 import yaml
 from pydantic import BaseModel, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
 
 CONFIG_PATH = Path("config.yaml")
-ENV_PATH = Path(".env")
 
 ALL_CENTRES = ["Cochin", "Chennai", "Bangalore", "Puducherry", "Hyderabad", "Goa", "Pune", "Mumbai",
                "Kolkata", "Ahmedabad", "Jaipur", "Gurugram", "New Delhi", "Chandigarh", "Jalandhar"]
@@ -49,26 +47,37 @@ class ScheduleConfig(BaseModel):
 
 
 class NotifyConfig(BaseModel):
-    telegram: bool = True
-    email: bool = True
-    call: bool = True
-    whatsapp: bool = False
-    cooldown_minutes: int = 30
-    heartbeat_hours: int = 6
-    alert_top_n: int = 0
-    quiet_hours_from: str = ""   # e.g. "23:00" — no phone calls between these (messages still go)
+    cooldown_minutes: int = 30   # don't re-alert the same availability within this window
+    heartbeat_hours: int = 6     # "still watching" message to bot-issue contacts (0 = off)
+    alert_top_n: int = 0         # only alert for the first N centres in priority order (0 = all)
+    quiet_hours_from: str = ""   # e.g. "23:00" — no voice calls between these (messages still go)
     quiet_hours_to: str = ""     # e.g. "07:00"
 
 
+class WhatsAppContact(BaseModel):
+    """One person to reach over WhatsApp Web. `chat` is the exact chat title in WhatsApp."""
+    chat: str
+    enabled: bool = True
+    mode: str = "message_call"   # "message" = text only | "message_call" = text, then call until they ack
+    bot_issues: bool = False     # also receives OTP / needs-human / error / heartbeat notices
+    call_attempts: int = 0       # 0 = use the global default
+    ack_keyword: str = ""        # "" = use the global default
+
+
 class WhatsAppWebConfig(BaseModel):
-    """Escalation over the office's own logged-in WhatsApp Web (no Twilio)."""
-    enabled: bool = False
-    chat: str = "Aslam 4indegree OH"
+    """Alerting over the office's own logged-in WhatsApp Web — the only alert channel."""
+    enabled: bool = True
+    contacts: list[WhatsAppContact] = Field(default_factory=list)
     ack_keyword: str = "ok"
     call_attempts: int = 3
-    call_interval_seconds: int = 120
+    call_interval_seconds: int = 120   # wait this long for an ack between call rounds
     ring_seconds: int = 25
+    stop_all_on_first_ack: bool = True # one person acking is enough: stop calling everyone
     profile_dir: str = "whatsapp-profile"
+    chat: str = ""                     # legacy single contact; migrated into `contacts` on load
+
+    def active_contacts(self) -> list[WhatsAppContact]:
+        return [c for c in self.contacts if c.enabled and c.chat.strip()]
 
 
 class BrowserConfig(BaseModel):
@@ -79,7 +88,7 @@ class BrowserConfig(BaseModel):
 
 class RotationConfig(BaseModel):
     """Login mode: sign in with a different account (own proxy/IP + browser profile) on every sweep,
-    then close the browser. Accounts are managed on the dashboard (state/accounts.json)."""
+    then close the browser. Accounts are managed on the dashboard (data/accounts.json)."""
     enabled: bool = True
     login_wait_minutes: int = 3        # give up on Cloudflare/OTP after this and move to the next account
     cooloff_hours: float = 2.0         # base cool-off for an account whose login stalled/blocked (doubles per fail)
@@ -122,41 +131,12 @@ class Config(BaseModel):
     def load(cls, path: str | Path = CONFIG_PATH) -> "Config":
         p = Path(path)
         data = yaml.safe_load(p.read_text()) if p.exists() else {}
-        return cls.model_validate(data or {})
+        cfg = cls.model_validate(data or {})
+        w = cfg.whatsapp_web
+        if w.chat and not w.contacts:   # pre-contacts config: one chat that got message + calls
+            w.contacts = [WhatsAppContact(chat=w.chat, mode="message_call", bot_issues=True)]
+            w.chat = ""
+        return cfg
 
     def save(self, path: str | Path = CONFIG_PATH) -> None:
         Path(path).write_text(yaml.safe_dump(self.model_dump(mode="json"), sort_keys=False, allow_unicode=True))
-
-
-class Secrets(BaseSettings):
-    """Credentials from .env / environment."""
-
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
-
-    vfs_email: str = ""
-    vfs_password: str = ""
-
-    # auto-OTP: IMAP access to the watcher account's own inbox (Gmail -> App Password)
-    imap_host: str = "imap.gmail.com"
-    imap_user: str = ""
-    imap_password: str = ""
-
-    telegram_bot_token: str = ""
-    telegram_chat_id: str = ""
-
-    smtp_host: str = "smtp.gmail.com"
-    smtp_port: int = 587
-    smtp_user: str = ""
-    smtp_password: str = ""
-    email_to: str = ""
-
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
-    twilio_from: str = ""
-    call_to: str = ""
-    whatsapp_from: str = ""      # Twilio WhatsApp sender, e.g. whatsapp:+14155238886
-    whatsapp_to: str = ""        # comma-separated, e.g. whatsapp:+91XXXXXXXXXX
-
-    def save(self, path: str | Path = ENV_PATH) -> None:
-        lines = [f"{k.upper()}={v}" for k, v in self.model_dump().items()]
-        Path(path).write_text("\n".join(lines) + "\n")

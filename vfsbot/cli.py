@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .config import Config, Secrets
+from .config import Config
 from .events import log_event
 from .notify import Notifier
 from .schedule import in_burst_window, in_run_window, next_delay
@@ -136,74 +136,6 @@ def _direct_ip(url: str) -> str:
         return ""
 
 
-def _spawn_escalation(message: str, key: str) -> None:
-    import os
-    import subprocess
-    log = open(STATE_FILE.parent / "ack.out", "a")
-    subprocess.Popen([sys.executable, "-m", "vfsbot.ack", message, key], cwd=Path("."),
-                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-
-
-def _handle_results(w, cfg: Config, st: dict, notifier: Notifier, results: list) -> None:
-    """Log the sweep, update the state file / matrix, alert + escalate on availability, heartbeat."""
-    url = f"{cfg.base_url}/dashboard"
-    report = summarize(results)
-    top_n = cfg.notify.alert_top_n or len(results)
-    avail = [r for r in results[:top_n] if r.available]
-    log.info("result:\n%s", report)
-    lu = getattr(w, "last_updated", "")
-    log_event("check", f"Sweep done: {len(avail)} centre(s) with slots" + (f" (VFS updated {lu})" if lu else ""), "alert" if avail else "info",
-              {"results": [{"centre": short_centre(r.centre), "available": r.available,
-                            "earliest": r.earliest, "source": r.source, "error": r.error} for r in results]})
-    raw = getattr(w, "last_raw", {}) or {}
-    if raw:
-        categories, matrix = _matrix_from_raw(raw, cfg.centre_list)
-    else:
-        # login watcher: one column for the watched category, from the per-centre results
-        categories = [cfg.category or "D visa"]
-        matrix = [{"centre": short_centre(r.centre),
-                   "cells": {categories[0]: (r.earliest or "")}} for r in results]
-    _set(st, last_check_at=datetime.now().isoformat(timespec="seconds"), last_result=report,
-         vfs_updated=getattr(w, "last_updated", ""), mode=cfg.mode,
-         vfs_updated_value=raw.get("lastUpdatedValue"), vfs_updated_type=raw.get("lastUpdatedType"),
-         vfs_fetched_at=datetime.now().isoformat(timespec="seconds"),
-         earliest_categories=categories, earliest_matrix=matrix,
-         last_results=[{"centre": short_centre(r.centre), "available": r.available, "earliest": r.earliest,
-                        "error": r.error} for r in results])
-
-    if avail:
-        key = [[short_centre(r.centre), r.earliest] for r in avail]
-        if _should_alert(st, key, cfg.notify.cooldown_minutes):
-            nearest = avail[0]
-            headline = f"Nearest: {short_centre(nearest.centre)} — {nearest.earliest}"
-            sent = notifier.slot_found(f"{headline}\n\n{report}", url,
-                                       spoken=f"{short_centre(nearest.centre)}, {nearest.earliest}")
-            log_event("alert", f"SLOT ALERT sent via {', '.join(sent) or 'no channel'}: {headline}", "alert",
-                      {"channels": sent, "available": key}, w.screenshot("slot_found"))
-            _set(st, last_alert_at=datetime.now().isoformat(timespec="seconds"), last_alert_key=key,
-                 last_alert_channels=sent)
-            if cfg.whatsapp_web.enabled:
-                msg = ("\U0001F389 VFS SLOT OPEN\n"
-                       f"Centre: {short_centre(nearest.centre)}\n"
-                       f"Earliest: {nearest.earliest}\n"
-                       f"Category: {cfg.category}"
-                       + (f" / {cfg.subcategory}" if cfg.subcategory else "") + "\n"
-                       f"Checked: {datetime.now().strftime('%d-%m %H:%M')}\n\n"
-                       f"{report}\n\nBook now: {url}\nReply OK to stop the calls.")
-                _spawn_escalation(msg, short_centre(nearest.centre) + " " + str(nearest.earliest))
-        else:
-            log.info("same availability as last alert, within cooldown — not re-alerting")
-    else:
-        st.pop("last_alert_key", None)
-
-    hb = cfg.notify.heartbeat_hours
-    if hb and not avail:
-        last_hb = st.get("last_heartbeat_at")
-        if not last_hb or datetime.fromisoformat(last_hb) + timedelta(hours=hb) < datetime.now():
-            notifier.heartbeat(f"still watching, nothing yet.\n{report}")
-            _set(st, last_heartbeat_at=datetime.now().isoformat(timespec="seconds"))
-
-
 def cmd_whatsapp_setup(cfg: Config) -> int:
     from .whatsapp_web import WhatsAppWeb
     print("Opening WhatsApp Web. On your phone: WhatsApp > Linked devices > Link a device, scan the QR.")
@@ -214,22 +146,22 @@ def cmd_whatsapp_setup(cfg: Config) -> int:
     return 0
 
 
-def cmd_watch(cfg: Config, secrets: Secrets, once: bool) -> int:
+def cmd_watch(cfg: Config, once: bool) -> int:
     if cfg.mode == "public":
         from .public_watcher import PublicWatcher
-        with PublicWatcher(cfg, secrets) as w:
-            return watch_loop(w, cfg, secrets, once)
+        with PublicWatcher(cfg) as w:
+            return watch_loop(w, cfg, once)
     if cfg.rotation.enabled and AccountPool().accounts:
-        return rotate_loop(cfg, secrets, once)
-    with Watcher(cfg, secrets) as w:
-        return watch_loop(w, cfg, secrets, once)
+        return rotate_loop(cfg, once)
+    with Watcher(cfg) as w:
+        return watch_loop(w, cfg, once)
 
 
-def rotate_loop(cfg: Config, secrets: Secrets, once: bool) -> int:
+def rotate_loop(cfg: Config, once: bool) -> int:
     """Login mode with account rotation: every sweep opens a fresh browser for the least recently
     used account (its own proxy/IP + profile), logs in, checks all centres, closes the browser.
     Accounts whose login stalls (Cloudflare cool-off) or gets blocked are benched for a while."""
-    notifier = Notifier(cfg.notify, secrets)
+    notifier = Notifier(cfg.notify)
     st = _load_state()
     consecutive_errors = 0
     STOP_FILE.unlink(missing_ok=True)
@@ -271,7 +203,7 @@ def rotate_loop(cfg: Config, secrets: Secrets, once: bool) -> int:
                     delay = max(60.0, min(cfg.rotation.retry_minutes * 60.0,
                                           (free_at - datetime.now()).total_seconds() + 5 if free_at else 60.0))
                 else:
-                    _run_sweep_as(acct, pool, cfg, secrets, st, notifier, direct_ip)
+                    _run_sweep_as(acct, pool, cfg, st, notifier, direct_ip)
                     consecutive_errors = 0
                     _set(st, accounts=pool.status())
         except ProxyError as e:
@@ -334,12 +266,12 @@ def rotate_loop(cfg: Config, secrets: Secrets, once: bool) -> int:
             return 0
 
 
-def _run_sweep_as(acct, pool: AccountPool, cfg: Config, secrets: Secrets, st: dict, notifier: Notifier, direct_ip: str) -> None:
+def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Notifier, direct_ip: str) -> None:
     """One full sweep as `acct`: open browser -> verify IP -> login (+OTP) -> check all centres -> close."""
     log.info("sweep as %s (%s)%s", acct.name, acct.email, " via proxy" if acct.proxy else "")
     _set(st, status="running", task=f"opening browser as {acct.name}", account=acct.name,
          account_email=acct.email, ip="")
-    with Watcher(cfg, secrets, account=acct) as w:
+    with Watcher(cfg, account=acct) as w:
         w.on_otp_required = lambda: (_set(st, status="needs_human", task=f"waiting for OTP ({acct.name})"),
                                      notifier.otp_needed(str(OTP_FILE)))
         w.on_human_needed = lambda what: (_set(st, status="needs_human", task=what), notifier.human_needed(what))
@@ -365,8 +297,8 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, secrets: Secrets, st: di
     log.info("browser closed (%s)", acct.name)
 
 
-def watch_loop(w: Watcher, cfg: Config, secrets: Secrets, once: bool) -> int:
-    notifier = Notifier(cfg.notify, secrets)
+def watch_loop(w: Watcher, cfg: Config, once: bool) -> int:
+    notifier = Notifier(cfg.notify)
     st = _load_state()
     url = f"{cfg.base_url}/dashboard"
     consecutive_errors = 0
@@ -457,9 +389,9 @@ def watch_loop(w: Watcher, cfg: Config, secrets: Secrets, once: bool) -> int:
             return 0
 
 
-def cmd_login(cfg: Config, secrets: Secrets) -> int:
-    notifier = Notifier(cfg.notify, secrets)
-    with Watcher(cfg, secrets) as w:
+def cmd_login(cfg: Config) -> int:
+    notifier = Notifier(cfg.notify)
+    with Watcher(cfg) as w:
         w.on_otp_required = lambda: notifier.otp_needed(str(OTP_FILE))
         w.on_human_needed = notifier.human_needed
         w.ensure_logged_in(wait_minutes=15)
@@ -468,8 +400,8 @@ def cmd_login(cfg: Config, secrets: Secrets) -> int:
     return 0
 
 
-def cmd_discover(cfg: Config, secrets: Secrets) -> int:
-    with Watcher(cfg, secrets) as w:
+def cmd_discover(cfg: Config) -> int:
+    with Watcher(cfg) as w:
         w.ensure_logged_in()
         opts = w.discover()
     print(json.dumps(opts, indent=2, ensure_ascii=False))
@@ -523,8 +455,8 @@ def cmd_earliest(cfg: Config, category: str, as_json: bool, only_available: bool
     return 0
 
 
-def cmd_test_notify(cfg: Config, secrets: Secrets) -> int:
-    for k, v in Notifier(cfg.notify, secrets).test_all().items():
+def cmd_test_notify(cfg: Config) -> int:
+    for k, v in Notifier(cfg.notify).test_all().items():
         print(f"{k:9s}: {'sent' if v else 'not configured / failed'}")
     return 0
 
@@ -562,7 +494,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     Path("state").mkdir(exist_ok=True)
     cfg = Config.load(a.config)
-    secrets = Secrets()
     if a.cmd == "watch":
         _set_instance(getattr(a, "instance", "public") or "public")
         if getattr(a, "mode", ""):
@@ -579,10 +510,10 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "earliest":
         return cmd_earliest(cfg, a.category, a.json, a.available, a.curl)
     return {
-        "login": lambda: cmd_login(cfg, secrets),
-        "discover": lambda: cmd_discover(cfg, secrets),
-        "test-notify": lambda: cmd_test_notify(cfg, secrets),
-        "watch": lambda: cmd_watch(cfg, secrets, a.once),
+        "login": lambda: cmd_login(cfg),
+        "discover": lambda: cmd_discover(cfg),
+        "test-notify": lambda: cmd_test_notify(cfg),
+        "watch": lambda: cmd_watch(cfg, a.once),
     }[a.cmd]()
 
 

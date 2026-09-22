@@ -4,12 +4,12 @@ Each sweep logs in with a *different* account (least recently used), through tha
 proxy and browser profile, then closes the browser. Spreads the login footprint: with 4 accounts and
 a 45-min interval, each account signs in once every ~3 h, from its own IP.
 
-Accounts live in state/accounts.json (edited on the dashboard, gitignored):
+Accounts live in data/accounts.json (edited on the dashboard; the whole data/ folder is gitignored):
     {"label": "Amal", "email": "...", "password": "...",
-     "imap_user": "", "imap_password": "",         # own Gmail App Password for auto-OTP (imap_user defaults to email)
+     "imap_host": "imap.gmail.com", "imap_user": "", "imap_password": "",   # own inbox for auto-OTP
      "proxy": "socks5://user:pass@host:port",       # per-account proxy = per-account IP ("" = direct)
      "enabled": true}
-Runtime bookkeeping (last use, IP, cool-off) is in state/accounts_state.json.
+Runtime bookkeeping (last use, IP, cool-off) is in data/accounts_state.json.
 """
 from __future__ import annotations
 
@@ -20,8 +20,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
-ACCOUNTS_FILE = Path("state/accounts.json")
-STATE_FILE = Path("state/accounts_state.json")
+DATA_DIR = Path("data")
+ACCOUNTS_FILE = DATA_DIR / "accounts.json"
+STATE_FILE = DATA_DIR / "accounts_state.json"
 PROFILES_ROOT = Path("browser-profile")
 
 
@@ -34,6 +35,7 @@ class Account:
     label: str
     email: str
     password: str
+    imap_host: str = "imap.gmail.com"
     imap_user: str = ""
     imap_password: str = ""
     proxy: str = ""
@@ -67,22 +69,42 @@ class Account:
     @classmethod
     def from_dict(cls, d: dict) -> "Account":
         return cls(label=d.get("label", ""), email=d.get("email", "").strip(), password=d.get("password", ""),
+                   imap_host=(d.get("imap_host") or "imap.gmail.com").strip(),
                    imap_user=d.get("imap_user", "").strip(), imap_password=d.get("imap_password", ""),
                    proxy=d.get("proxy", "").strip(), enabled=bool(d.get("enabled", True)),
                    passport_file=d.get("passport_file", ""))
 
 
-def load_accounts() -> list[Account]:
+def load_raw_accounts() -> list[dict]:
+    """The accounts file as stored (passwords included) — for the dashboard editor."""
+    _migrate()
     if not ACCOUNTS_FILE.exists():
         return []
     try:
-        raw = json.loads(ACCOUNTS_FILE.read_text())
+        return [a for a in json.loads(ACCOUNTS_FILE.read_text()) if a.get("email")]
     except Exception:  # noqa: BLE001
         return []
-    return [Account.from_dict(a) for a in raw if a.get("email")]
+
+
+def save_raw_accounts(raw: list[dict]) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    ACCOUNTS_FILE.write_text(json.dumps(raw, indent=2))
+
+
+def load_accounts() -> list[Account]:
+    return [Account.from_dict(a) for a in load_raw_accounts()]
+
+
+def _migrate() -> None:
+    """Older versions kept accounts under state/; move them into data/ once."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    for old, new in ((Path("state/accounts.json"), ACCOUNTS_FILE), (Path("state/accounts_state.json"), STATE_FILE)):
+        if old.exists() and not new.exists():
+            old.replace(new)
 
 
 def load_state() -> dict:
+    _migrate()
     if STATE_FILE.exists():
         try:
             return json.loads(STATE_FILE.read_text())

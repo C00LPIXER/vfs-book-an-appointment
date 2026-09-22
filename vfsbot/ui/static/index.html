@@ -36,7 +36,7 @@ header .spacer{flex:1}
 nav{display:flex;gap:4px;padding:10px 16px 0;border-bottom:1px solid var(--line);background:var(--bg)}
 nav button{background:none;border:0;color:var(--muted);padding:10px 14px;font:inherit;font-weight:600;cursor:pointer;border-bottom:2px solid transparent}
 nav button.active{color:var(--text);border-bottom-color:var(--accent)}
-main{padding:16px;max-width:1240px;margin:0 auto}
+main{padding:16px 24px;max-width:none;margin:0}
 .tab{display:none}.tab.active{display:block}
 .grid{display:grid;gap:14px}
 .g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
@@ -53,7 +53,19 @@ main{padding:16px;max-width:1240px;margin:0 auto}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin:10px 0 4px}
 input[type=text],input[type=password],input[type=number],input[type=date],input[type=time],select,textarea{
-  width:100%;background:var(--bg2);border:1px solid var(--line2);color:var(--text);padding:8px 10px;border-radius:8px;font:inherit}
+  width:100%;background:var(--bg2);border:1px solid var(--line2);color:var(--text);padding:10px 12px;border-radius:8px;font:inherit;font-size:14px;min-width:0}
+.settings{display:grid;gap:14px;grid-template-columns:repeat(12,1fr)}
+.settings>.card{grid-column:span 4}
+.settings>.card.wide{grid-column:span 12}
+.settings>.card.half{grid-column:span 6}
+@media (max-width:1400px){.settings>.card{grid-column:span 6}}
+@media (max-width:900px){.settings>.card,.settings>.card.half{grid-column:span 12}}
+.fields{display:grid;gap:10px 12px;align-items:end}
+.fields label{margin:0 0 4px}
+.entry{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:10px 0;background:var(--bg2)}
+.entry .hint{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:6px}
+.entry .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.entry .top b{font-size:13px}
 input:focus,select:focus{outline:none;border-color:var(--accent)}
 .check{display:flex;align-items:center;gap:8px;font-size:13px;margin:6px 0}
 .check input{width:16px;height:16px;accent-color:var(--accent)}
@@ -122,7 +134,7 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
         <button class="btn primary" id="btnStart">Start</button>
         <button class="btn" id="btnPause">Pause</button>
         <button class="btn danger" id="btnStop">Stop</button></div></div>
-    <div class="card" id="loginCard" style="border-color:var(--line2);display:none"><h3>Login watcher — rotating accounts</h3>
+    <div class="card" id="loginCard" style="border-color:var(--line2)"><h3>Login watcher — rotating accounts</h3>
       <div class="stat" id="lState">—</div>
       <div class="mono" id="lTask" style="color:var(--muted);margin:4px 0 2px"></div>
       <div class="mono" id="lAccount" style="color:var(--muted)"></div>
@@ -166,20 +178,30 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
 
 <!-- ============ SETTINGS ============ -->
 <section class="tab" id="tab-settings">
-  <div class="grid g2">
-    <div class="card"><h3>VFS accounts</h3>
-      <div style="color:var(--muted);font-size:12px">The login watcher rotates through these: every sweep signs in with the least recently used account, through its own proxy (= its own IP) and browser profile, then closes the browser. IMAP = that account's Gmail App Password for auto-OTP (user defaults to the email). Proxy: <span class="mono">socks5://user:pass@host:port</span> or <span class="mono">http://…</span>; leave empty to use the machine's IP.</div>
-      <div id="acctList" style="margin-top:8px"></div>
+  <div class="settings">
+    <div class="card wide"><h3>VFS accounts</h3>
+      <div style="color:var(--muted);font-size:13px">The login watcher rotates through these: every sweep signs in with the least recently used account, through its own proxy (= its own IP) and browser profile, then closes the browser. <b>IMAP</b> = that account's Gmail App Password so the bot reads its own OTP (user defaults to the email). <b>Proxy</b>: <span class="mono">socks5://user:pass@host:port</span> or <span class="mono">http://…</span>; leave empty to use the machine's IP.</div>
+      <div id="acctList" style="margin-top:6px"></div>
       <div class="row" style="margin-top:8px"><button class="btn" id="acctAdd">+ Add account</button><button class="btn primary" id="acctSave">Save accounts</button></div>
-      <h3 style="margin-top:16px">Passport bio page</h3>
-      <label>PNG/JPG/PDF, ≤ 2 MB</label>
-      <div class="row"><input type="file" id="passportFile" accept=".jpg,.jpeg,.png,.pdf"><button class="btn" id="passportBtn">Upload</button></div>
-      <div class="mono" id="passportInfo" style="color:var(--muted);margin-top:6px"></div>
-      <h3 style="margin-top:16px">Auto-OTP from inbox (IMAP)</h3>
-      <div style="color:var(--muted);font-size:12px">Gmail: enable 2-step verification → create an <b>App Password</b>. Leave empty to type OTPs by hand.</div>
-      <label>IMAP host</label><input type="text" id="s_imap_host">
-      <label>IMAP user (email)</label><input type="text" id="s_imap_user">
-      <label>IMAP app password</label><input type="password" id="s_imap_password" autocomplete="new-password">
+    </div>
+
+    <div class="card wide"><h3>WhatsApp alerts</h3>
+      <div style="color:var(--muted);font-size:13px">The only alert channel. Uses the office's own logged-in WhatsApp Web (link once: <span class="mono">vfsbot whatsapp-setup</span>). On a real slot every contact gets the message; contacts set to <b>message + call</b> are then called (missed call) and called again every interval until they reply the keyword. <b>Bot issues</b> = also gets OTP / needs-human / error notices.</div>
+      <div id="waList" style="margin-top:6px"></div>
+      <div class="row" style="margin-top:8px"><button class="btn" id="waAdd">+ Add contact</button></div>
+      <div class="fields" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-top:14px">
+        <div><label>Ack keyword (default)</label><input type="text" id="w_ack_keyword"></div>
+        <div><label>Call attempts (default)</label><input type="number" id="w_call_attempts" min="1" max="20"></div>
+        <div><label>Wait between call rounds (s)</label><input type="number" id="w_call_interval_seconds" min="30"></div>
+        <div><label>Ring for (s)</label><input type="number" id="w_ring_seconds" min="5" max="60"></div>
+        <div><label>Quiet hours — no calls from</label><input type="time" id="n_quiet_hours_from"></div>
+        <div><label>until</label><input type="time" id="n_quiet_hours_to"></div>
+        <div><label>Re-alert cooldown (min)</label><input type="number" id="n_cooldown_minutes" min="1"></div>
+        <div><label>Heartbeat every N h (0 = off)</label><input type="number" id="n_heartbeat_hours" min="0"></div>
+      </div>
+      <div class="check" style="margin-top:10px"><input type="checkbox" id="w_enabled"><span>WhatsApp alerts enabled</span></div>
+      <div class="check"><input type="checkbox" id="w_stop_all_on_first_ack"><span>One ack is enough — stop calling everyone once anybody replies</span></div>
+      <div class="row" style="margin-top:10px"><button class="btn" id="waTestBtn">Test slot alert (real messages + calls to all)</button><button class="btn" id="waNoticeBtn">Test bot-issue notice (message only)</button></div>
     </div>
 
     <div class="card"><h3>Visa &amp; centres</h3>
@@ -187,8 +209,8 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
       <label>Sub-category (empty = first option)</label><select id="c_subcategory"></select>
       <label>Centres — tick to check, ▲▼ to set priority (nearest first)</label>
       <ul class="centres" id="centreList"></ul>
-      <label>Pause between centres (seconds)</label><input type="number" id="c_centre_pause_seconds" min="2" max="60">
-      <label>Only alert for the first N centres (0 = all)</label><input type="number" id="n_alert_top_n" min="0" max="15">
+      <div class="row"><div style="flex:1"><label>Pause between centres (s)</label><input type="number" id="c_centre_pause_seconds" min="2" max="60"></div>
+        <div style="flex:1"><label>Only alert for first N centres (0 = all)</label><input type="number" id="n_alert_top_n" min="0" max="15"></div></div>
     </div>
 
     <div class="card"><h3>Schedule</h3>
@@ -207,48 +229,18 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
       <div class="row"><div style="flex:1"><label>From</label><input type="time" id="b_start"></div><div style="flex:1"><label>Until</label><input type="time" id="b_end"></div><div style="flex:1"><label>Every (s)</label><input type="number" id="b_interval_seconds" min="20"></div></div>
     </div>
 
-    <div class="card"><h3>Alerts</h3>
-      <div class="check"><input type="checkbox" id="n_telegram"><span>Telegram</span></div>
-      <label>Bot token</label><input type="password" id="s_telegram_bot_token" autocomplete="new-password">
-      <label>Chat / group ID</label><input type="text" id="s_telegram_chat_id">
-      <div class="check" style="margin-top:12px"><input type="checkbox" id="n_email"><span>Email</span></div>
-      <div class="row"><div style="flex:2"><label>SMTP host</label><input type="text" id="s_smtp_host"></div><div style="flex:1"><label>Port</label><input type="number" id="s_smtp_port"></div></div>
-      <label>SMTP user</label><input type="text" id="s_smtp_user">
-      <label>SMTP password (Gmail: App Password)</label><input type="password" id="s_smtp_password" autocomplete="new-password">
-      <label>Send to</label><input type="text" id="s_email_to" placeholder="a@x.com, b@y.com">
-      <div class="check" style="margin-top:12px"><input type="checkbox" id="n_call"><span>Phone call (Twilio)</span></div>
-      <div class="check"><input type="checkbox" id="n_whatsapp"><span>WhatsApp (Twilio WhatsApp sender)</span></div>
-      <label>Twilio Account SID</label><input type="text" id="s_twilio_account_sid">
-      <label>Twilio Auth Token</label><input type="password" id="s_twilio_auth_token" autocomplete="new-password">
-      <label>Twilio phone number (from)</label><input type="text" id="s_twilio_from" placeholder="+1…">
-      <label>Call these numbers</label><input type="text" id="s_call_to" placeholder="+91…, +91…">
-      <label>WhatsApp sender</label><input type="text" id="s_whatsapp_from" placeholder="whatsapp:+14155238886">
-      <label>WhatsApp recipients</label><input type="text" id="s_whatsapp_to" placeholder="whatsapp:+91…, whatsapp:+91…">
-      <div class="row"><div style="flex:1"><label>Quiet hours — no calls from</label><input type="time" id="n_quiet_hours_from"></div><div style="flex:1"><label>until</label><input type="time" id="n_quiet_hours_to"></div></div>
-      <label>Re-alert cooldown (minutes)</label><input type="number" id="n_cooldown_minutes" min="1">
-      <label>Heartbeat every N hours (0 = off)</label><input type="number" id="n_heartbeat_hours" min="0">
-      <div class="row" style="margin-top:12px"><button class="btn" id="testNotifyBtn">Send test to all channels</button></div>
-    </div>
-
-    <div class="card"><h3>WhatsApp escalation (Aslam)</h3>
-      <div style="color:var(--muted);font-size:12px">Uses your own logged-in WhatsApp Web (link it once: run <span class="mono">vfsbot whatsapp-setup</span>). On a real slot it messages the contact with the slot data, then calls; if they reply the keyword it stops, else it calls again.</div>
-      <div class="check" style="margin-top:8px"><input type="checkbox" id="w_enabled"><span>Enable WhatsApp escalation</span></div>
-      <label>Contact (exact WhatsApp chat name)</label><input type="text" id="w_chat">
-      <label>Acknowledge keyword (reply that stops the calls)</label><input type="text" id="w_ack_keyword">
-      <div class="row"><div style="flex:1"><label>Call attempts</label><input type="number" id="w_call_attempts" min="1" max="10"></div>
-        <div style="flex:1"><label>Wait between calls (s)</label><input type="number" id="w_call_interval_seconds" min="30"></div>
-        <div style="flex:1"><label>Ring for (s)</label><input type="number" id="w_ring_seconds" min="5" max="60"></div></div>
-      <div class="row" style="margin-top:10px"><button class="btn" id="waTestBtn">Send a real test now to this contact</button></div>
-    </div>
-
     <div class="card"><h3>Login watcher — account rotation</h3>
-      <div style="color:var(--muted);font-size:12px">Each sweep uses a different account + proxy IP and closes the browser afterwards. If Cloudflare's widget stays blank (cool-off) or a login stalls, that account is benched (cool-off doubles on every consecutive failure, max 24 h) and the next one is tried after the retry delay.</div>
-      <div class="check" style="margin-top:8px"><input type="checkbox" id="r_enabled"><span>Rotate accounts (off = single account from .env, session kept open)</span></div>
+      <div style="color:var(--muted);font-size:13px">Each sweep uses a different account + proxy IP and closes the browser afterwards. If Cloudflare's widget stays blank (cool-off) or a login stalls, that account is benched (cool-off doubles on every consecutive failure, max 24 h) and the next one is tried after the retry delay.</div>
+      <div class="check" style="margin-top:8px"><input type="checkbox" id="r_enabled"><span>Rotate accounts (off = single account, session kept open)</span></div>
       <div class="check"><input type="checkbox" id="r_verify_ip"><span>Verify the public IP through the proxy before every login</span></div>
       <div class="check"><input type="checkbox" id="r_require_proxy"><span>Refuse to log in with an account that has no proxy</span></div>
       <div class="row"><div style="flex:1"><label>Login/OTP wait (min)</label><input type="number" id="r_login_wait_minutes" min="1" max="15"></div>
         <div style="flex:1"><label>Cool-off (hours)</label><input type="number" id="r_cooloff_hours" min="0.5" step="0.5"></div>
         <div style="flex:1"><label>Retry next account after (min)</label><input type="number" id="r_retry_minutes" min="1"></div></div>
+      <h3 style="margin-top:16px">Passport bio page</h3>
+      <label>PNG/JPG/PDF, ≤ 2 MB — selected automatically on an account's first login (a human presses Continue)</label>
+      <div class="row"><input type="file" id="passportFile" accept=".jpg,.jpeg,.png,.pdf"><button class="btn" id="passportBtn">Upload</button></div>
+      <div class="mono" id="passportInfo" style="color:var(--muted);margin-top:6px"></div>
     </div>
   </div>
   <div class="row" style="margin-top:14px"><button class="btn primary" id="saveBtn">Save settings</button><span class="mono" style="color:var(--muted)">Saved settings are picked up by the running bot on its next cycle.</span></div>
@@ -339,7 +331,7 @@ async function loadStatus() {
     $('#lUpdated').textContent = lst.last_check_at ? 'last check ' + fmt(lst.last_check_at) : '';
     $('#lAccount').textContent = L.running && lst.account ? `account: ${lst.account}` + (lst.ip ? `  ·  ip ${lst.ip}` : '') : '';
     $('#otpWho').textContent = lst.account || 'the account';
-    const accs = lst.accounts || [];
+    const accs = s.accounts || lst.accounts || [];
     $('#lAccounts').innerHTML = accs.length ? `<table><thead><tr><th>Account</th><th>Last login</th><th>IP</th><th>Status</th></tr></thead><tbody>` +
       accs.map(a => `<tr><td>${a.name}${a.has_proxy ? '' : ' <span class="tag none" title="no proxy">no proxy</span>'}</td><td class="mono">${a.last_login_at ? fmt(a.last_login_at) : '—'}</td><td class="mono">${a.last_ip || '—'}</td><td>${!a.enabled ? '<span class="tag none">off</span>' : a.cooldown_until ? `<span class="tag err" title="${(a.last_error||'').replace(/"/g,'&quot;')}">cool-off until ${fmt(a.cooldown_until)}</span>` : '<span class="tag ok">ready</span>'}</td></tr>`).join('') + '</tbody></table>' : '';
     $('#lStart').disabled = L.running; $('#lStop').disabled = !L.running;
@@ -394,40 +386,58 @@ function acctStatusLine(a) {
   bits.push(s.logins ? `${s.logins} login(s), last ${fmt(s.last_login_at)}` : 'never logged in');
   if (s.last_ip) bits.push('ip ' + s.last_ip);
   if (s.cooldown_until) bits.push(`<span class="tag err">cool-off until ${fmt(s.cooldown_until)}</span> ${esc(s.last_error || '')} <button class="btn acc-clear" data-clear="${esc(a.email)}">clear</button>`);
-  return `<div class="mono" style="color:var(--dim);font-size:11px;margin:2px 0 0 4px">${bits.join('  ·  ')}</div>`;
+  return `<div class="hint">${bits.join('  ·  ')}</div>`;
 }
 function renderAccounts() {
   $('#acctList').innerHTML = ACCOUNTS.map((a, i) => `
-    <div data-ai="${i}" style="margin:8px 0;padding:8px;border:1px solid var(--line);border-radius:8px">
-      <div class="row" style="gap:6px;align-items:center">
-        <input type="checkbox" class="acc-on" ${a.enabled === false ? '' : 'checked'} title="enabled">
-        <input type="text" class="acc-label" placeholder="Label (e.g. Amal)" value="${esc(a.label)}" style="flex:1">
-        <input type="text" class="acc-email" placeholder="VFS email" value="${esc(a.email)}" style="flex:2" autocomplete="off">
-        <input type="password" class="acc-pass" placeholder="VFS password" value="${esc(a.password)}" style="flex:2" autocomplete="new-password">
-        <button class="btn acc-del" data-del="${i}" title="remove">✕</button>
-      </div>
-      <div class="row" style="gap:6px;align-items:center;margin-top:6px">
-        <input type="text" class="acc-imap" placeholder="IMAP user (default: email)" value="${esc(a.imap_user)}" style="flex:2" autocomplete="off">
-        <input type="password" class="acc-imappw" placeholder="Gmail App Password (auto-OTP)" value="${esc(a.imap_password)}" style="flex:2" autocomplete="new-password">
-        <input type="text" class="acc-proxy" placeholder="proxy  socks5://user:pass@host:port" value="${esc(a.proxy)}" style="flex:3" autocomplete="off">
+    <div class="entry" data-ai="${i}">
+      <div class="top"><b>${esc(a.label) || esc(a.email) || 'New account'}</b><div class="row"><label class="check" style="margin:0"><input type="checkbox" class="acc-on" ${a.enabled === false ? '' : 'checked'}><span>enabled</span></label><button class="btn acc-del" data-del="${i}" title="remove">✕ remove</button></div></div>
+      <div class="fields" style="grid-template-columns:1fr 2fr 2fr 1fr" data-orig="${esc(a.orig_email || '')}">
+        <div><label>Label</label><input type="text" class="acc-label" placeholder="e.g. Amal" value="${esc(a.label)}"></div>
+        <div><label>VFS email</label><input type="text" class="acc-email" placeholder="name@gmail.com" value="${esc(a.email)}" autocomplete="off"></div>
+        <div style="grid-column:span 2"><label>VFS password</label><input type="password" class="acc-pass" value="${esc(a.password)}" autocomplete="new-password"></div>
+        <div><label>IMAP user (default: email)</label><input type="text" class="acc-imap" placeholder="${esc(a.email) || 'same as email'}" value="${esc(a.imap_user)}" autocomplete="off"></div>
+        <div><label>Gmail App Password (auto-OTP)</label><input type="password" class="acc-imappw" placeholder="16-letter app password" value="${esc(a.imap_password)}" autocomplete="new-password"></div>
+        <div><label>Proxy (this account's IP)</label><input type="text" class="acc-proxy" placeholder="socks5://user:pass@host:port" value="${esc(a.proxy)}" autocomplete="off"></div>
+        <div><label>IMAP host</label><input type="text" class="acc-imaphost" value="${esc(a.imap_host || 'imap.gmail.com')}" autocomplete="off"></div>
       </div>${acctStatusLine(a)}
     </div>`).join('') || '<div class="mono" style="color:var(--dim)">No accounts yet — click “Add account”.</div>';
-  document.querySelectorAll('.acc-del').forEach(b => b.onclick = () => { ACCOUNTS.splice(+b.dataset.del, 1); readAccountInputs(); renderAccounts(); });
+  document.querySelectorAll('.acc-del').forEach(b => b.onclick = () => { readAccountInputs(); ACCOUNTS.splice(+b.dataset.del, 1); renderAccounts(); });
   document.querySelectorAll('.acc-clear').forEach(b => b.onclick = async () => { await api('/api/accounts/clear-cooloff', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: b.dataset.clear }) }); toast('Cool-off cleared'); loadAccounts(); });
 }
 function readAccountInputs() {
   const rows = [...document.querySelectorAll('#acctList [data-ai]')];
-  ACCOUNTS = rows.map((r, i) => ({ label: r.querySelector('.acc-label').value, email: r.querySelector('.acc-email').value, password: r.querySelector('.acc-pass').value,
-    imap_user: r.querySelector('.acc-imap').value, imap_password: r.querySelector('.acc-imappw').value, proxy: r.querySelector('.acc-proxy').value,
+  ACCOUNTS = rows.map((r, i) => ({ label: r.querySelector('.acc-label').value, email: r.querySelector('.acc-email').value, orig_email: r.querySelector('.fields').dataset.orig || '', password: r.querySelector('.acc-pass').value,
+    imap_host: r.querySelector('.acc-imaphost').value, imap_user: r.querySelector('.acc-imap').value, imap_password: r.querySelector('.acc-imappw').value, proxy: r.querySelector('.acc-proxy').value,
     enabled: r.querySelector('.acc-on').checked, status: (ACCOUNTS[i] || {}).status }));
 }
+let WA = [];
+function renderWa() {
+  $('#waList').innerHTML = WA.map((c, i) => `
+    <div class="entry" data-wi="${i}">
+      <div class="fields" style="grid-template-columns:2fr 1.4fr 1fr 1fr auto auto auto">
+        <div><label>WhatsApp chat name (exact)</label><input type="text" class="wa-chat" placeholder="as shown in WhatsApp" value="${esc(c.chat)}"></div>
+        <div><label>On a slot</label><select class="wa-mode"><option value="message" ${c.mode === 'message' ? 'selected' : ''}>Message only</option><option value="message_call" ${c.mode !== 'message' ? 'selected' : ''}>Message + call until ack</option></select></div>
+        <div><label>Call attempts (0 = default)</label><input type="number" class="wa-attempts" min="0" max="20" value="${c.call_attempts || 0}"></div>
+        <div><label>Ack keyword (blank = default)</label><input type="text" class="wa-kw" value="${esc(c.ack_keyword)}"></div>
+        <label class="check" style="margin:0 0 8px"><input type="checkbox" class="wa-issues" ${c.bot_issues ? 'checked' : ''}><span>bot issues</span></label>
+        <label class="check" style="margin:0 0 8px"><input type="checkbox" class="wa-on" ${c.enabled === false ? '' : 'checked'}><span>enabled</span></label>
+        <button class="btn wa-del" data-del="${i}" style="margin-bottom:6px">✕</button>
+      </div>
+    </div>`).join('') || '<div class="mono" style="color:var(--dim)">No contacts yet — click “Add contact”.</div>';
+  document.querySelectorAll('.wa-del').forEach(b => b.onclick = () => { readWa(); WA.splice(+b.dataset.del, 1); renderWa(); });
+}
+function readWa() {
+  WA = [...document.querySelectorAll('#waList [data-wi]')].map(r => ({ chat: r.querySelector('.wa-chat').value, mode: r.querySelector('.wa-mode').value, call_attempts: +r.querySelector('.wa-attempts').value || 0,
+    ack_keyword: r.querySelector('.wa-kw').value, bot_issues: r.querySelector('.wa-issues').checked, enabled: r.querySelector('.wa-on').checked }));
+}
+$('#waAdd').onclick = () => { readWa(); WA.push({ chat: '', mode: 'message_call', call_attempts: 0, ack_keyword: '', bot_issues: false, enabled: true }); renderWa(); };
 async function loadAccounts() { ACCOUNTS = await api('/api/accounts'); renderAccounts(); }
-$('#acctAdd').onclick = () => { readAccountInputs(); ACCOUNTS.push({ label: '', email: '', password: '', imap_user: '', imap_password: '', proxy: '', enabled: true }); renderAccounts(); };
-$('#acctSave').onclick = async () => { readAccountInputs(); try { const r = await api('/api/accounts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accounts: ACCOUNTS.filter(a => a.email.trim()) }) }); toast('Saved ' + r.count + ' account(s)'); loadAccounts(); } catch (e) { toast(e.message); } };
+$('#acctAdd').onclick = () => { readAccountInputs(); ACCOUNTS.push({ label: '', email: '', orig_email: '', password: '', imap_host: 'imap.gmail.com', imap_user: '', imap_password: '', proxy: '', enabled: true }); renderAccounts(); };
+$('#acctSave').onclick = async () => { readAccountInputs(); try { const r = await api('/api/accounts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accounts: ACCOUNTS.filter(a => a.email.trim()) }) }); toast('Saved ' + r.count + ' account(s)'); loadAccounts(); loadStatus(); } catch (e) { toast('Not saved — ' + e.message); } };
 async function loadConfig() {
   const d = await api('/api/config'); CFG = d.config; CATS = d.categories;
   CFG.centres = CFG.centres.map(c => typeof c === 'string' ? { name: c, enabled: true } : c);
-  for (const [k, v] of Object.entries(d.secrets)) { const el = $('#s_' + k); if (el) el.value = v ?? ''; }
   $('#c_category').innerHTML = Object.keys(CATS).map(c => `<option ${c === CFG.category ? 'selected' : ''}>${c}</option>`).join(''); renderSubcats();
   $('#c_category').onchange = renderSubcats;
   renderCentres();
@@ -435,11 +445,11 @@ async function loadConfig() {
   $('#sc_date_from').value = CFG.schedule.date_from; $('#sc_date_to').value = CFG.schedule.date_to; $('#sc_hours_from').value = CFG.schedule.hours_from; $('#sc_hours_to').value = CFG.schedule.hours_to;
   $('#sc_days').innerHTML = DAYS.map((d, i) => `<label class="check" style="margin:0 8px 0 0"><input type="checkbox" class="day" data-d="${i}" ${CFG.schedule.days.includes(i) ? 'checked' : ''}>${d}</label>`).join('');
   $('#b_enabled').checked = CFG.burst.enabled; $('#b_start').value = CFG.burst.start; $('#b_end').value = CFG.burst.end; $('#b_interval_seconds').value = CFG.burst.interval_seconds;
-  for (const k of ['telegram', 'email', 'call', 'whatsapp']) $('#n_' + k).checked = CFG.notify[k];
   for (const k of ['cooldown_minutes', 'heartbeat_hours', 'alert_top_n', 'quiet_hours_from', 'quiet_hours_to']) $('#n_' + k).value = CFG.notify[k];
   const w = CFG.whatsapp_web || {};
-  $('#w_enabled').checked = !!w.enabled; $('#w_chat').value = w.chat || ''; $('#w_ack_keyword').value = w.ack_keyword || 'ok';
+  $('#w_enabled').checked = w.enabled !== false; $('#w_stop_all_on_first_ack').checked = w.stop_all_on_first_ack !== false; $('#w_ack_keyword').value = w.ack_keyword || 'ok';
   $('#w_call_attempts').value = w.call_attempts ?? 3; $('#w_call_interval_seconds').value = w.call_interval_seconds ?? 120; $('#w_ring_seconds').value = w.ring_seconds ?? 25;
+  WA = (w.contacts || []).map(c => ({ ...c })); renderWa();
   const r = CFG.rotation || {};
   $('#r_enabled').checked = r.enabled !== false; $('#r_verify_ip').checked = r.verify_ip !== false; $('#r_require_proxy').checked = !!r.require_proxy;
   $('#r_login_wait_minutes').value = r.login_wait_minutes ?? 3; $('#r_cooloff_hours').value = r.cooloff_hours ?? 2; $('#r_retry_minutes').value = r.retry_minutes ?? 5;
@@ -452,13 +462,12 @@ $('#saveBtn').onclick = async () => {
     CFG.centre_pause_seconds = +$('#c_centre_pause_seconds').value; CFG.interval_seconds = +$('#c_interval_seconds').value;
     CFG.schedule = { ...CFG.schedule, date_from: $('#sc_date_from').value, date_to: $('#sc_date_to').value, hours_from: $('#sc_hours_from').value || '00:00', hours_to: $('#sc_hours_to').value || '23:59', days: [...document.querySelectorAll('.day:checked')].map(x => +x.dataset.d) };
     CFG.burst = { ...CFG.burst, enabled: $('#b_enabled').checked, start: $('#b_start').value, end: $('#b_end').value, interval_seconds: +$('#b_interval_seconds').value };
-    for (const k of ['telegram', 'email', 'call', 'whatsapp']) CFG.notify[k] = $('#n_' + k).checked;
     for (const k of ['cooldown_minutes', 'heartbeat_hours', 'alert_top_n']) CFG.notify[k] = +$('#n_' + k).value;
     CFG.notify.quiet_hours_from = $('#n_quiet_hours_from').value; CFG.notify.quiet_hours_to = $('#n_quiet_hours_to').value;
-    CFG.whatsapp_web = { ...CFG.whatsapp_web, enabled: $('#w_enabled').checked, chat: $('#w_chat').value, ack_keyword: $('#w_ack_keyword').value, call_attempts: +$('#w_call_attempts').value, call_interval_seconds: +$('#w_call_interval_seconds').value, ring_seconds: +$('#w_ring_seconds').value };
+    readWa();
+    CFG.whatsapp_web = { ...CFG.whatsapp_web, enabled: $('#w_enabled').checked, stop_all_on_first_ack: $('#w_stop_all_on_first_ack').checked, contacts: WA.filter(c => c.chat.trim()), chat: '', ack_keyword: $('#w_ack_keyword').value, call_attempts: +$('#w_call_attempts').value, call_interval_seconds: +$('#w_call_interval_seconds').value, ring_seconds: +$('#w_ring_seconds').value };
     CFG.rotation = { ...CFG.rotation, enabled: $('#r_enabled').checked, verify_ip: $('#r_verify_ip').checked, require_proxy: $('#r_require_proxy').checked, login_wait_minutes: +$('#r_login_wait_minutes').value, cooloff_hours: +$('#r_cooloff_hours').value, retry_minutes: +$('#r_retry_minutes').value };
-    const secrets = {}; document.querySelectorAll('[id^="s_"]').forEach(el => { if (el) secrets[el.id.slice(2)] = el.value; });
-    await api('/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: CFG, secrets }) });
+    await api('/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: CFG }) });
     toast('Settings saved');
   } catch (e) { toast('Save failed: ' + e.message); }
 };
@@ -467,8 +476,8 @@ $('#passportBtn').onclick = async () => {
   const fd = new FormData(); fd.append('file', f);
   try { const r = await api('/api/passport', { method: 'POST', body: fd }); toast('Passport saved'); $('#passportInfo').textContent = `current: ${r.path} (${Math.round(r.size / 1024)} KB)`; } catch (e) { toast(e.message); }
 };
-$('#waTestBtn').onclick = () => { if (!confirm('Send a REAL WhatsApp message and place a call to ' + $('#w_chat').value + ' now?')) return; api('/api/whatsapp-test', { method: 'POST' }).then(() => toast('Escalation started — check the Logs tab')).catch(e => toast(e.message)); };
-$('#testNotifyBtn').onclick = async () => { toast('Sending tests…'); const r = await api('/api/test-notify', { method: 'POST' }); toast(Object.entries(r).map(([k, v]) => `${k}: ${v ? 'ok' : 'no'}`).join(' · ')); };
+$('#waTestBtn').onclick = () => { readWa(); const who = WA.filter(c => c.enabled !== false && c.chat.trim()).map(c => c.chat + (c.mode === 'message' ? ' (msg)' : ' (msg+call)')).join(', '); if (!who) return toast('No contacts — add and save first'); if (!confirm('Send a REAL WhatsApp slot alert (using the SAVED settings) to: ' + who + ' ?')) return; api('/api/whatsapp-test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'slot' }) }).then(() => toast('Escalation started — check the Logs tab')).catch(e => toast(e.message)); };
+$('#waNoticeBtn').onclick = () => { if (!confirm('Send a REAL test notice to the saved "bot issues" contacts?')) return; api('/api/whatsapp-test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'notice' }) }).then(() => toast('Notice sent — check the Logs tab')).catch(e => toast(e.message)); };
 
 // ---- logs ----
 async function loadEvents() {

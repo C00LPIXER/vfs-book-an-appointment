@@ -21,8 +21,8 @@ from typing import Optional
 
 from playwright.sync_api import BrowserContext, Page, Response, TimeoutError as PWTimeout, sync_playwright
 
-from .accounts import Account
-from .config import Config, Secrets
+from .accounts import Account, AccountPool
+from .config import Config
 from .events import log_event
 from .otp import fetch_latest_otp
 
@@ -117,15 +117,16 @@ def summarize(results: list["SlotResult"]) -> str:
 
 
 class Watcher:
-    def __init__(self, cfg: Config, secrets: Secrets, account: Account | None = None):
+    def __init__(self, cfg: Config, account: Account | None = None):
         self.cfg = cfg
-        self.secrets = secrets
-        # Rotation: each sweep gets its own account (creds, IMAP inbox, proxy, browser profile).
-        # Without one we fall back to the single VFS_EMAIL / VFS_PASSWORD in .env.
-        self.account = account or Account(label="", email=secrets.vfs_email, password=secrets.vfs_password,
-                                          imap_user=secrets.imap_user, imap_password=secrets.imap_password)
-        # pool account -> its own profile dir; legacy .env account -> the shared one from config
-        self.profile_dir = account.profile_dir if account else cfg.browser.profile_dir
+        # Each account brings its own creds, IMAP inbox, proxy and browser profile. Without an explicit
+        # one (non-rotating mode / CLI helpers) take the pool's next available account.
+        if account is None:
+            account = AccountPool().next()
+            if account is None:
+                raise RuntimeError("no VFS account available — add one on the dashboard (data/accounts.json)")
+        self.account = account
+        self.profile_dir = account.profile_dir
         self.public_ip: str = ""
         self._pw = None
         self.ctx: BrowserContext | None = None
@@ -349,7 +350,7 @@ class Watcher:
                     otp_asked_at = datetime.now().astimezone()
                     self.on_otp_required()
                 if not self._try_submit_otp() and waited % 10_000 == 0 and self.account.imap_password:
-                    code = fetch_latest_otp(self.secrets.imap_host, self.account.imap_login,
+                    code = fetch_latest_otp(self.account.imap_host, self.account.imap_login,
                                             self.account.imap_password, not_before=otp_asked_at)
                     if code:
                         OTP_FILE.parent.mkdir(parents=True, exist_ok=True)

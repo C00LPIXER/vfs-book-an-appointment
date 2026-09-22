@@ -20,7 +20,7 @@ from pathlib import Path
 
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
-from .config import Config, Secrets
+from .config import Config
 from .events import log_event
 from .watcher import Blocked, SlotResult, _fmt_date, find_browser, short_centre
 
@@ -41,9 +41,8 @@ _FETCH_JS = """async ({url, tok, payload}) => {
 
 
 class PublicWatcher:
-    def __init__(self, cfg: Config, secrets: Secrets | None = None):
+    def __init__(self, cfg: Config):
         self.cfg = cfg
-        self.secrets = secrets
         self._pw = None
         self.ctx: BrowserContext | None = None
         self.page: Page | None = None

@@ -9,7 +9,7 @@ playwright install chromium >/dev/null   # fallback only; a real Brave/Chrome is
 if ! command -v brave-browser >/dev/null && [ ! -x /opt/brave.com/brave/brave ] && ! command -v google-chrome >/dev/null; then
   echo "!! Install Brave (https://brave.com/linux) or Google Chrome (.deb/.rpm, not Flatpak) before running."
 fi
-[ -f .env ] || cp .env.example .env
+mkdir -p data state
 mkdir -p state documents ~/.config/systemd/user
 cp deploy/vfsbot-ui.service ~/.config/systemd/user/
 systemctl --user daemon-reload

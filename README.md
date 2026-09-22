@@ -15,9 +15,9 @@ contact over WhatsApp until acknowledged.
   earliest date, carrying a "last updated N minutes ago" stamp.
 - **Login mode:** logs into one account and reads the *post-login* availability (per-centre
   `CheckIsSlotAvailable`). More accurate; needs OTP per session and keeps the session alive.
-- **Alerting:** on a slot for the watched category → WhatsApp message + call to a configured contact,
-  repeated up to N times until they reply an acknowledgement keyword. Optional Telegram / email /
-  Twilio channels.
+- **Alerting (WhatsApp Web only):** on a slot for the watched category → message to every configured
+  contact; contacts in *message + call* mode are then voice-called and re-called every interval until
+  they reply the ack keyword. Contacts flagged *bot issues* also get OTP / needs-human / error notices.
 - **Dashboard** (`http://127.0.0.1:8787`): live availability matrix with "last updated N minutes
   back", Start/Stop/Pause, OTP box, event log, screenshots, multi-account settings — dark theme.
 
@@ -47,13 +47,13 @@ Key modules (`vfsbot/`):
 | `watcher.py`        | login watcher (Brave, Cloudflare, OTP, passport, per-centre check), shared `SlotResult` |
 | `accounts.py`       | account pool: per-account creds / IMAP / proxy / profile, LRU rotation, cool-off benching |
 | `cli.py`            | `watch` loop, run-window/interval scheduling, state files, instances |
-| `notify.py`         | Telegram / email / Twilio call / WhatsApp channels + quiet hours |
+| `notify.py`         | hands every notification to `vfsbot.ack` in a subprocess (never blocks the watcher) |
 | `whatsapp_web.py`   | drives an already-linked WhatsApp Web session: message, voice call, read reply |
-| `ack.py`            | escalation orchestrator: message → call → wait for ack → repeat → record |
+| `ack.py`            | multi-contact escalation: message all → call the *message_call* ones → poll chats for acks → repeat |
 | `otp.py`            | IMAP auto-OTP (reads the OTP from the account's own inbox) |
 | `events.py`         | SQLite event log shared with the UI |
 | `schedule.py`       | run-window, burst window, randomized `next_delay` |
-| `config.py`         | `config.yaml` model + `.env` secrets |
+| `config.py`         | `config.yaml` model (settings only, no secrets) |
 | `ui/`               | FastAPI server + single-file dark dashboard |
 
 ---
@@ -163,7 +163,7 @@ pick least-recently-used account (enabled, not cooling off, ≠ last one)
  → per-centre CheckIsSlotAvailable sweep → close browser
 ```
 
-Bench rules (`state/accounts_state.json`, doubling per consecutive failure, max 24 h):
+Bench rules (`data/accounts_state.json`, doubling per consecutive failure, max 24 h):
 
 | Event | Detection | Bench |
 |-------|-----------|-------|
@@ -175,8 +175,8 @@ Bench rules (`state/accounts_state.json`, doubling per consecutive failure, max 
 After a failure the next account is tried after `retry_minutes` (5); if every account is benched the
 watcher sleeps until the first one frees. `cf_clearance` is IP+UA bound, so the pairing
 *account ↔ profile ↔ proxy* is kept fixed — a cookie minted for one account's IP is never replayed
-from another. Per-account fields (dashboard → Settings → VFS accounts): `email`, `password`,
-`imap_user` (defaults to email), `imap_password` (Gmail App Password), `proxy`
+from another. Per-account fields (dashboard → Settings → VFS accounts, stored in `data/accounts.json`): `email`, `password`,
+`imap_host`, `imap_user` (defaults to email), `imap_password` (Gmail App Password), `proxy`
 (`socks5://user:pass@host:port` or `http://…`), `enabled`. Settings in `config.yaml → rotation`.
 
 ---
@@ -187,8 +187,8 @@ from another. Per-account fields (dashboard → Settings → VFS accounts): `ema
 git clone <repo> vfs-book-an-appointment && cd vfs-book-an-appointment
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e . && playwright install chromium   # a real Brave/Chrome is still required
-cp .env.example .env                               # fill credentials / channels
 ./deploy/install.sh                                # optional: systemd user service for the web tool
+# accounts, passwords, proxies and WhatsApp contacts are entered on the dashboard (Settings tab)
 ```
 
 Requires a real **Brave** (`/opt/brave.com/brave/brave`) or Google Chrome (non-Flatpak). Playwright's
@@ -201,26 +201,38 @@ vfsbot earliest               # one-shot: print all centres × categories now
 vfsbot earliest --available   # only rows with a date
 vfsbot earliest --curl        # full API call with a fresh cf_clearance cookie
 vfsbot whatsapp-setup         # link WhatsApp Web once (QR scan)
-vfsbot test-notify            # test Telegram / email / call / WhatsApp
+vfsbot test-notify            # test notice to the "bot issues" WhatsApp contacts
 ```
 
-Config in `config.yaml` (interval, centres + priority, category, run window, burst, alerts, whatsapp
-escalation). Secrets in `.env`. Accounts are managed on the dashboard's Settings tab (stored in
-`state/accounts.json`, gitignored).
+Config in `config.yaml` (interval, centres + priority, category, run window, burst, WhatsApp contacts,
+rotation). Accounts and every other secret live as JSON under `data/` (gitignored) — there is no `.env`.
 
 ### WhatsApp escalation
 
-Uses an already-linked WhatsApp Web session in its own Brave profile (`vfsbot whatsapp-setup`). On a
-slot: message with the details → voice call (`aria-label="Voice call"`) → wait `call_interval_seconds`
-for a reply containing the ack keyword → repeat up to `call_attempts` → record the ack in the event
-log and stop. The profile suppresses session-restore so it opens one clean tab.
+Uses an already-linked WhatsApp Web session in its own Brave profile (`vfsbot whatsapp-setup`).
+Contacts (`config.yaml → whatsapp_web.contacts`, edited on the dashboard) each have: `chat` (exact
+WhatsApp title), `mode` = `message` | `message_call`, `bot_issues`, optional per-contact
+`call_attempts` / `ack_keyword`. On a slot (`python -m vfsbot.ack slot <msg> <key>`):
+
+1. message every enabled contact (baseline = incoming-message count per chat)
+2. call round: voice call (`aria-label="Voice call"`, ring `ring_seconds`) to each pending
+   `message_call` contact
+3. wait `call_interval_seconds`, cycling through the pending chats and checking for a *new* incoming
+   message containing that contact's ack keyword; an acked contact is dropped, and with
+   `stop_all_on_first_ack` everyone is
+4. repeat until every pending contact acked or hit their attempts; acks are recorded in the event log
+   and `state/acknowledged.json`. Quiet hours (`notify.quiet_hours_*`) suppress calls, not messages.
+
+`python -m vfsbot.ack notice <text>` sends a message-only notice to the `bot_issues` contacts (OTP,
+needs-human, errors, heartbeat). The profile suppresses session-restore so it opens one clean tab.
 
 ---
 
 ## 7. Files & state
 
-- `config.yaml` — settings (committed). `.env`, `state/accounts.json` — secrets (gitignored).
-- `state/accounts_state.json` — per-account bookkeeping: last use, last IP, logins, cool-off.
+- `config.yaml` — settings (committed; no secrets).
+- `data/` — **gitignored**, everything secret/runtime as JSON: `accounts.json` (VFS creds, IMAP app
+  passwords, proxies), `accounts_state.json` (per-account last use / IP / logins / cool-off).
 - `browser-profile/<email-slug>/` — one Brave profile per rotated account.
 - `state/` — `events.db`, `<instance>.json` status, `screenshots/`, logs (gitignored).
 - `documents/` — passport image (gitignored). `*-profile/` — live browser sessions (gitignored).

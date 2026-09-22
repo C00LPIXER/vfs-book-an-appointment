@@ -1,6 +1,6 @@
 # secrets & data — never commit
-.env
-state/accounts.json
+# all runtime data & secrets (accounts, passwords, proxies, cool-off state)
+data/
 state/*.json
 state/*.db
 state/*.log
