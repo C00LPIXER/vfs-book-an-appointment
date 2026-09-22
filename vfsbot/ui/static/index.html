@@ -251,7 +251,7 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
       <div class="row"><div style="flex:1"><label>Pause between centres (s)</label><input type="number" id="c_centre_pause_seconds" min="2" max="60"></div>
         <div style="flex:1"><label>Only alert for first N centres (0 = all)</label><input type="number" id="n_alert_top_n" min="0" max="15"></div></div>
       <div class="check" style="margin-top:8px"><input type="checkbox" id="c_sweep_all"><span>One rotation = one account checks <b>every</b> ticked centre (signs in again when VFS's per-session quota runs out); the next rotation uses the next account</span></div>
-      <div class="row"><div style="flex:1"><label>Centres per login (VFS answers ~7, then logs out)</label><input type="number" id="c_login_centres_per_session" min="1" max="15"></div>
+      <div class="row"><div style="flex:1"><label>Centres per login (0 = until the session ends)</label><input type="number" id="c_login_centres_per_session" min="0" max="15"></div>
         <div style="flex:1"><label>Max logins per rotation</label><input type="number" id="c_max_logins_per_sweep" min="1" max="6"></div>
         <div style="flex:1"><label>Gap between those logins (s)</label><input type="number" id="c_relogin_gap_seconds" min="30" max="900"></div></div>
     </div>
@@ -577,7 +577,7 @@ async function loadConfig() {
 $('#saveBtn').onclick = async () => {
   try {
     CFG.category = $('#c_category').value; CFG.subcategory = $('#c_subcategory').value;
-    CFG.centre_pause_seconds = +$('#c_centre_pause_seconds').value; CFG.login_centres_per_session = +$('#c_login_centres_per_session').value || 6; CFG.sweep_all_centres = $('#c_sweep_all').checked; CFG.max_logins_per_sweep = +$('#c_max_logins_per_sweep').value || 3; CFG.relogin_gap_seconds = +$('#c_relogin_gap_seconds').value || 120; CFG.interval_seconds = +$('#c_interval_seconds').value; CFG.public_interval_seconds = +$('#c_public_interval_seconds').value;
+    CFG.centre_pause_seconds = +$('#c_centre_pause_seconds').value; CFG.login_centres_per_session = +$('#c_login_centres_per_session').value || 0; CFG.sweep_all_centres = $('#c_sweep_all').checked; CFG.max_logins_per_sweep = +$('#c_max_logins_per_sweep').value || 3; CFG.relogin_gap_seconds = +$('#c_relogin_gap_seconds').value || 120; CFG.interval_seconds = +$('#c_interval_seconds').value; CFG.public_interval_seconds = +$('#c_public_interval_seconds').value;
     CFG.schedule = { ...CFG.schedule, date_from: $('#sc_date_from').value, date_to: $('#sc_date_to').value, hours_from: $('#sc_hours_from').value || '00:00', hours_to: $('#sc_hours_to').value || '23:59', days: [...document.querySelectorAll('.day:checked')].map(x => +x.dataset.d) };
     CFG.burst = { ...CFG.burst, enabled: $('#b_enabled').checked, start: $('#b_start').value, end: $('#b_end').value, interval_seconds: +$('#b_interval_seconds').value };
     for (const k of ['cooldown_minutes', 'heartbeat_hours', 'alert_top_n']) CFG.notify[k] = +$('#n_' + k).value;

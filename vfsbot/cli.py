@@ -525,11 +525,13 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
         pool.mark_login_ok(acct)
         all_centres = list(cfg.centre_list)
         todo = list(centres) if centres is not None else all_centres
-        per = max(1, min(cfg.login_centres_per_session, len(todo)))
+        # 0 = no cap: keep checking until the session ends by itself, so a session that survives the
+        # whole list finishes the rotation in one login
+        per = len(todo) if cfg.login_centres_per_session <= 0 else max(1, min(cfg.login_centres_per_session, len(todo)))
         batch = todo[:per]
         burst = "  [burst]" if in_burst_window(cfg) else ""
         _set(st, status="running", task=f"checking {', '.join(short_centre(c) for c in batch)} as {acct.name}{burst}")
-        log.info("checking %d of %d centres as %s (%s)%s", per, len(all_centres), acct.name, ", ".join(short_centre(c) for c in batch), burst)
+        log.info("checking %d of %d centres as %s (%s)%s", len(batch), len(all_centres), acct.name, ", ".join(short_centre(c) for c in batch), burst)
 
         live = {r["centre"]: r for r in st.get("centre_live", []) if r.get("state") not in ("checking",)}
         for r in st.get("last_results", []):      # older sweeps (before the live table existed)

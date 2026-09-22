@@ -35,7 +35,7 @@ centres:
 category: D visa
 subcategory: ''
 centre_pause_seconds: 4.0
-login_centres_per_session: 6
+login_centres_per_session: 0
 api_replay: false
 interval_seconds: 3600
 jitter_seconds: 300
