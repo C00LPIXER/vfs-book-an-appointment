@@ -456,6 +456,10 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
         log.info("checking %d of %d centres as %s (%s)%s", per, len(all_centres), acct.name, ", ".join(short_centre(c) for c in batch), burst)
 
         live = {r["centre"]: r for r in st.get("centre_live", []) if r.get("state") not in ("checking",)}
+        for r in st.get("last_results", []):      # older sweeps (before the live table existed)
+            if r.get("checked_at") and r["centre"] not in live:
+                live[r["centre"]] = {"state": "error" if r.get("error") else ("slot" if r.get("available") else "none"),
+                                     "earliest": r.get("earliest"), "checked_at": r.get("checked_at"), "by": None, "error": r.get("error", "")}
         for c in batch:
             live[short_centre(c)] = {**live.get(short_centre(c), {}), "state": "queued", "error": ""}
 
