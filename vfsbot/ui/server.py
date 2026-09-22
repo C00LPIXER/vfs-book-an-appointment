@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import os
 import shutil
 import signal
@@ -42,7 +43,7 @@ SECRET_KEYS = {"vfs_password", "imap_password", "smtp_password", "twilio_auth_to
 
 INSTANCES = {
     "public": {"mode": "public", "profile": "public-profile", "label": "Public (no login)"},
-    "login":  {"mode": "login",  "profile": "browser-profile", "label": "Logged-in (amalkrishnap)"},
+    "login":  {"mode": "login",  "profile": "browser-profile", "label": "Logged-in (rotating accounts)"},
 }
 
 
@@ -259,11 +260,26 @@ def _load_accounts() -> list:
     return []
 
 
+MASK = "••••••"
+
+
+def _mask_proxy(p: str) -> str:
+    """Hide the proxy password in the UI but keep host/port visible: scheme://user:••••••@host:port."""
+    return re.sub(r"(://[^:@/]+:)[^@]+@", r"\1" + MASK + "@", p or "")
+
+
 @app.get("/api/accounts")
 def get_accounts():
-    accts = _load_accounts()
+    from ..accounts import AccountPool
+    pool = AccountPool()
+    stat = {s["email"]: s for s in pool.status()}
     return [{"label": a.get("label", ""), "email": a.get("email", ""),
-             "password": "••••••" if a.get("password") else ""} for a in accts]
+             "password": MASK if a.get("password") else "",
+             "imap_user": a.get("imap_user", ""),
+             "imap_password": MASK if a.get("imap_password") else "",
+             "proxy": _mask_proxy(a.get("proxy", "")),
+             "enabled": bool(a.get("enabled", True)),
+             "status": stat.get(a.get("email", ""), {})} for a in _load_accounts()]
 
 
 class AccountsIn(BaseModel):
@@ -278,10 +294,19 @@ def set_accounts(body: AccountsIn):
         email = (a.get("email") or "").strip()
         if not email:
             continue
+        cur = current.get(email, {})
         pw = a.get("password") or ""
-        if pw == "••••••":            # unchanged -> keep stored password
-            pw = current.get(email, {}).get("password", "")
-        out.append({"label": (a.get("label") or "").strip(), "email": email, "password": pw})
+        if pw == MASK:                # unchanged -> keep stored value
+            pw = cur.get("password", "")
+        imap_pw = a.get("imap_password") or ""
+        if imap_pw == MASK:
+            imap_pw = cur.get("imap_password", "")
+        proxy = (a.get("proxy") or "").strip()
+        if MASK in proxy:             # masked proxy password -> keep the stored proxy
+            proxy = cur.get("proxy", "")
+        out.append({"label": (a.get("label") or "").strip(), "email": email, "password": pw,
+                    "imap_user": (a.get("imap_user") or "").strip(), "imap_password": imap_pw,
+                    "proxy": proxy, "enabled": bool(a.get("enabled", True))})
     ACCOUNTS_FILE.write_text(json.dumps(out, indent=2))
     # mirror the FIRST account into the main VFS creds (used by the login watcher)
     if out:
@@ -290,6 +315,15 @@ def set_accounts(body: AccountsIn):
         Secrets.model_validate(cur).save()
     events.log_event("control", f"Saved {len(out)} account(s)", "info")
     return {"ok": True, "count": len(out)}
+
+
+@app.post("/api/accounts/clear-cooloff")
+def clear_cooloff(body: dict):
+    from ..accounts import AccountPool
+    pool = AccountPool()
+    pool.clear_cooloff((body.get("email") or "").strip())
+    events.log_event("control", f"Cool-off cleared for {body.get('email')}", "info")
+    return {"ok": True}
 
 
 @app.post("/api/passport")

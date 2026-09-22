@@ -21,6 +21,7 @@ from typing import Optional
 
 from playwright.sync_api import BrowserContext, Page, Response, TimeoutError as PWTimeout, sync_playwright
 
+from .accounts import Account
 from .config import Config, Secrets
 from .events import log_event
 from .otp import fetch_latest_otp
@@ -70,6 +71,15 @@ class Blocked(Exception):
     browsers or after too many requests. Nothing to do but back off / use a visible browser."""
 
 
+class CoolOff(Blocked):
+    """Cloudflare is in its cool-off state for this account/IP: the Turnstile widget stays blank and
+    never produces a token, so sign-in cannot proceed. Rotate to another account + IP and back off."""
+
+
+class ProxyError(Exception):
+    """The account's proxy is not working / the public IP did not change."""
+
+
 BLOCK_RE = re.compile(r'"code"\s*:\s*"403\d*"|access denied|attention required|cloudflare', re.I)
 
 
@@ -107,9 +117,16 @@ def summarize(results: list["SlotResult"]) -> str:
 
 
 class Watcher:
-    def __init__(self, cfg: Config, secrets: Secrets):
+    def __init__(self, cfg: Config, secrets: Secrets, account: Account | None = None):
         self.cfg = cfg
         self.secrets = secrets
+        # Rotation: each sweep gets its own account (creds, IMAP inbox, proxy, browser profile).
+        # Without one we fall back to the single VFS_EMAIL / VFS_PASSWORD in .env.
+        self.account = account or Account(label="", email=secrets.vfs_email, password=secrets.vfs_password,
+                                          imap_user=secrets.imap_user, imap_password=secrets.imap_password)
+        # pool account -> its own profile dir; legacy .env account -> the shared one from config
+        self.profile_dir = account.profile_dir if account else cfg.browser.profile_dir
+        self.public_ip: str = ""
         self._pw = None
         self.ctx: BrowserContext | None = None
         self.page: Page | None = None
@@ -119,19 +136,25 @@ class Watcher:
 
     def __enter__(self) -> "Watcher":
         self._pw = sync_playwright().start()
-        profile = Path(self.cfg.browser.profile_dir).resolve()
+        profile = Path(self.profile_dir).resolve()
         profile.mkdir(parents=True, exist_ok=True)
         exe = find_browser(self.cfg.browser.executable)
         if exe:
-            log.info("using browser: %s", exe)
+            log.info("using browser: %s  profile=%s  account=%s", exe, profile.name, self.account.name or "-")
         else:
             log.warning("No real Chrome/Brave found — falling back to Playwright's Chromium, which FAILS "
                         "Cloudflare's check on VFS. Install Brave or Google Chrome (non-flatpak).")
+        proxy = self.account.playwright_proxy()
+        if proxy:
+            log.info("proxy: %s", proxy["server"])
+        elif self.cfg.rotation.require_proxy:
+            raise ProxyError(f"{self.account.name}: no proxy configured and rotation.require_proxy is on")
         self.ctx = self._pw.chromium.launch_persistent_context(
             str(profile),
             executable_path=exe,
             headless=self.cfg.browser.headless,
             no_viewport=True,   # no emulation at all: Cloudflare flags locale/timezone/viewport overrides
+            proxy=proxy,
             args=["--disable-blink-features=AutomationControlled"],
             ignore_default_args=["--enable-automation"],
         )
@@ -261,6 +284,29 @@ class Watcher:
         except Exception:  # noqa: BLE001
             return False
 
+    # ---- proxy / IP ---------------------------------------------------------------
+
+    def check_ip(self, must_differ_from: str = "") -> str:
+        """Look up the public IP as seen *through the browser* (i.e. through the proxy). Raises
+        ProxyError when the proxy is dead or the IP is one we must not reuse (the machine's own IP
+        when a proxy is configured, or the IP the previous account just used)."""
+        url = self.cfg.rotation.ip_check_url
+        try:
+            self.page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            text = self.page.locator("body").inner_text(timeout=5000)
+            m = re.search(r"(\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f:]{6,})", text)
+            if not m:
+                raise ProxyError(f"unexpected reply from {url}: {text[:80]!r}")
+            self.public_ip = m.group(1)
+        except ProxyError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise ProxyError(f"IP lookup through proxy failed: {str(e).splitlines()[0][:120]}") from e
+        log.info("public IP for %s: %s", self.account.name, self.public_ip)
+        if must_differ_from and self.public_ip == must_differ_from:
+            raise ProxyError(f"public IP {self.public_ip} is the same as the last one — proxy not effective")
+        return self.public_ip
+
     # ---- login --------------------------------------------------------------------
 
     def ensure_logged_in(self, wait_minutes: int = 10) -> None:
@@ -278,6 +324,7 @@ class Watcher:
         login_started = datetime.now().astimezone()
 
         deadline = wait_minutes * 60_000
+        stall_ms = 90_000   # blank Turnstile for this long = cool-off
         step = 2_000
         waited = 0
         clicked = False
@@ -288,8 +335,8 @@ class Watcher:
                 self.page.goto(f"{self.cfg.base_url}/dashboard", wait_until="domcontentloaded")
                 self._wait_for_spa()
             if self._is_logged_in() or self._on_passport_upload():
-                log.info("Logged in.")
-                log_event("login", "Logged in", "info")
+                log.info("Logged in as %s.", self.account.name)
+                log_event("login", f"Logged in ({self.account.name}" + (f", ip {self.public_ip}" if self.public_ip else "") + ")", "info")
                 self.page.wait_for_timeout(1500)
                 if self._on_passport_upload():
                     self._upload_passport()
@@ -297,13 +344,13 @@ class Watcher:
             if self._on_otp_step():
                 if not otp_announced:
                     log.warning("OTP required — type it in the browser window, or write it to %s", OTP_FILE)
-                    log_event("otp", "OTP requested by VFS (sent to the account's email/SMS/WhatsApp)", "warn")
+                    log_event("otp", f"OTP requested by VFS for {self.account.name} (sent to the account's email/SMS/WhatsApp)", "warn")
                     otp_announced = True
                     otp_asked_at = datetime.now().astimezone()
                     self.on_otp_required()
-                if not self._try_submit_otp() and waited % 10_000 == 0 and self.secrets.imap_user:
-                    code = fetch_latest_otp(self.secrets.imap_host, self.secrets.imap_user,
-                                            self.secrets.imap_password, not_before=otp_asked_at)
+                if not self._try_submit_otp() and waited % 10_000 == 0 and self.account.imap_password:
+                    code = fetch_latest_otp(self.secrets.imap_host, self.account.imap_login,
+                                            self.account.imap_password, not_before=otp_asked_at)
                     if code:
                         OTP_FILE.parent.mkdir(parents=True, exist_ok=True)
                         OTP_FILE.write_text(code)
@@ -311,7 +358,7 @@ class Watcher:
                         self._try_submit_otp()
             else:
                 # If Turnstile has already produced a token and the button is enabled, click once.
-                if not clicked and self.secrets.vfs_email:
+                if not clicked and self.account.email:
                     try:
                         token = self.page.input_value("input[name='cf-turnstile-response']", timeout=500)
                         btn = self._submit_button()
@@ -328,15 +375,40 @@ class Watcher:
                     log_event("login", "Cloudflare check needs a human click in the browser window", "warn",
                               screenshot=self.screenshot("cloudflare_check"))
                     self.on_human_needed("Cloudflare 'verify you are human' check — click it in the bot's browser window")
+                if waited >= stall_ms and not clicked and self._turnstile_stalled():
+                    # Blank widget, no token, no checkbox: Cloudflare cool-off for this account/IP.
+                    log_event("blocked", f"Cloudflare Turnstile stalled (blank) for {self.account.name} — cool-off",
+                              "error", {"ip": self.public_ip}, self.screenshot("turnstile_stalled"))
+                    raise CoolOff(f"Turnstile stalled for {self.account.name} (ip {self.public_ip or '?'})")
             self.page.wait_for_timeout(step)
             waited += step
-        log_event("login", "Gave up waiting for login/OTP", "error", screenshot=self.screenshot("login_timeout"))
+        log_event("login", f"Gave up waiting for login/OTP ({self.account.name})", "error", screenshot=self.screenshot("login_timeout"))
         raise (OtpRequired if self._on_otp_step() else LoginRequired)(self.url)
+
+    def _turnstile_stalled(self) -> bool:
+        """True when the Turnstile widget is present but has neither produced a token nor rendered an
+        interactive checkbox (the frame's inner document stays empty) — the observed cool-off state."""
+        try:
+            if self.page.input_value("input[name='cf-turnstile-response']", timeout=500):
+                return False
+        except Exception:  # noqa: BLE001
+            pass
+        if not self._has_turnstile():
+            return False
+        try:
+            for fr in self.page.frames:
+                if "challenges.cloudflare.com" in fr.url:
+                    body = fr.locator("body").inner_text(timeout=1500).strip()
+                    if body:                       # "Verifying…", checkbox label, "Success!" → not stalled
+                        return False
+        except Exception:  # noqa: BLE001
+            return False
+        return True
 
     def _upload_passport(self) -> None:
         """One-time account step after first login: VFS wants the passport bio page.
         We select the file and stop — a human presses Continue (VFS locks the extracted data)."""
-        f = Path(self.cfg.passport_file)
+        f = Path(self.account.passport_file or self.cfg.passport_file)
         if not f.exists():
             log_event("upload", f"VFS asks for the passport bio page but {f} is missing", "error",
                       screenshot=self.screenshot("passport_missing"))
@@ -356,7 +428,7 @@ class Watcher:
         """Hook: the CLI replaces this to send a Telegram/email nudge."""
 
     def _prefill_login(self) -> None:
-        if not self.secrets.vfs_email:
+        if not self.account.email:
             return
         try:
             user = self.page.locator("input[formcontrolname='username']")
@@ -367,10 +439,10 @@ class Watcher:
             except PWTimeout:
                 pass
             for _ in range(3):
-                if user.input_value() == self.secrets.vfs_email:
+                if user.input_value() == self.account.email:
                     return
-                user.fill(self.secrets.vfs_email)
-                self.page.fill("input[formcontrolname='password']", self.secrets.vfs_password)
+                user.fill(self.account.email)
+                self.page.fill("input[formcontrolname='password']", self.account.password)
                 self.page.wait_for_timeout(1500)  # verify it stuck
         except Exception:  # noqa: BLE001
             log.debug("could not pre-fill login form")

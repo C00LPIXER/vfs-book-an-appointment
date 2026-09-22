@@ -45,6 +45,7 @@ Key modules (`vfsbot/`):
 |------|------|
 | `public_watcher.py` | login-free watcher; in-page `fetch` of the public earliest-date endpoint |
 | `watcher.py`        | login watcher (Brave, Cloudflare, OTP, passport, per-centre check), shared `SlotResult` |
+| `accounts.py`       | account pool: per-account creds / IMAP / proxy / profile, LRU rotation, cool-off benching |
 | `cli.py`            | `watch` loop, run-window/interval scheduling, state files, instances |
 | `notify.py`         | Telegram / email / Twilio call / WhatsApp channels + quiet hours |
 | `whatsapp_web.py`   | drives an already-linked WhatsApp Web session: message, voice call, read reply |
@@ -149,6 +150,35 @@ Session facts:
 4. An account can be flagged/blocked for automated or multi-login patterns; when that happens the
    login does not proceed for that account.
 
+### Account rotation & per-account proxy (`vfsbot/accounts.py`, `cli.rotate_loop`)
+
+Login mode does not keep one session alive; every sweep is a fresh identity:
+
+```
+pick least-recently-used account (enabled, not cooling off, ≠ last one)
+ → launch Brave with that account's own profile (browser-profile/<email-slug>/) and proxy
+ → GET ip_check_url through the browser; abort (ProxyError) if the proxy is dead, the IP equals the
+   machine's own IP while a proxy is set, or equals the IP the previous account just used
+ → login (creds pre-filled, Turnstile auto-pass, OTP from that account's own Gmail via IMAP)
+ → per-centre CheckIsSlotAvailable sweep → close browser
+```
+
+Bench rules (`state/accounts_state.json`, doubling per consecutive failure, max 24 h):
+
+| Event | Detection | Bench |
+|-------|-----------|-------|
+| Turnstile cool-off | widget iframe present, no `cf-turnstile-response` token and empty frame body for 90 s | `cooloff_hours` (2 h) |
+| WAF block page | `{"code":"403…"}` / "Attention required" | `cooloff_hours` |
+| login / OTP timeout | nothing after `login_wait_minutes` (3) | `cooloff_hours / 2` |
+| proxy dead / leaking | IP lookup fails or IP unchanged | 1 h |
+
+After a failure the next account is tried after `retry_minutes` (5); if every account is benched the
+watcher sleeps until the first one frees. `cf_clearance` is IP+UA bound, so the pairing
+*account ↔ profile ↔ proxy* is kept fixed — a cookie minted for one account's IP is never replayed
+from another. Per-account fields (dashboard → Settings → VFS accounts): `email`, `password`,
+`imap_user` (defaults to email), `imap_password` (Gmail App Password), `proxy`
+(`socks5://user:pass@host:port` or `http://…`), `enabled`. Settings in `config.yaml → rotation`.
+
 ---
 
 ## 6. Setup & usage
@@ -190,6 +220,8 @@ log and stop. The profile suppresses session-restore so it opens one clean tab.
 ## 7. Files & state
 
 - `config.yaml` — settings (committed). `.env`, `state/accounts.json` — secrets (gitignored).
+- `state/accounts_state.json` — per-account bookkeeping: last use, last IP, logins, cool-off.
+- `browser-profile/<email-slug>/` — one Brave profile per rotated account.
 - `state/` — `events.db`, `<instance>.json` status, `screenshots/`, logs (gitignored).
 - `documents/` — passport image (gitignored). `*-profile/` — live browser sessions (gitignored).
 - `deploy/` — systemd unit + install script.

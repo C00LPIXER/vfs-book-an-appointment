@@ -12,7 +12,8 @@ from .config import Config, Secrets
 from .events import log_event
 from .notify import Notifier
 from .schedule import in_burst_window, in_run_window, next_delay
-from .watcher import OTP_FILE, Blocked, LoginRequired, OtpRequired, Watcher, short_centre, summarize
+from .accounts import AccountPool
+from .watcher import OTP_FILE, Blocked, CoolOff, LoginRequired, OtpRequired, ProxyError, Watcher, short_centre, summarize
 
 log = logging.getLogger("vfsbot")
 
@@ -108,7 +109,7 @@ def _matrix_from_raw(raw: dict, centre_order: list[str]) -> tuple[list[str], lis
     return cats, rows
 
 
-def _sleep_keepalive(w: Watcher, seconds: float, st: dict) -> None:
+def _sleep_keepalive(w: Watcher | None, seconds: float, st: dict) -> None:
     """Sleep in short slices; nudge the page, honour stop, and break early on a force-refresh."""
     end = time.monotonic() + seconds
     while (left := end - time.monotonic()) > 0:
@@ -118,8 +119,21 @@ def _sleep_keepalive(w: Watcher, seconds: float, st: dict) -> None:
             REFRESH_FILE.unlink(missing_ok=True)
             return  # break the wait so the loop sweeps immediately
         time.sleep(min(5, left))
-        w.keepalive()
+        if w is not None:
+            w.keepalive()
         _set(st, next_check_in=int(left))
+
+
+def _direct_ip(url: str) -> str:
+    """The machine's own public IP (no proxy) — used to detect a proxy that silently leaks."""
+    import re as _re
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url, timeout=15) as r:
+            m = _re.search(r"(\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f:]{6,})", r.read().decode("utf-8", "ignore"))
+            return m.group(1) if m else ""
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _spawn_escalation(message: str, key: str) -> None:
@@ -128,6 +142,66 @@ def _spawn_escalation(message: str, key: str) -> None:
     log = open(STATE_FILE.parent / "ack.out", "a")
     subprocess.Popen([sys.executable, "-m", "vfsbot.ack", message, key], cwd=Path("."),
                      stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+
+
+def _handle_results(w, cfg: Config, st: dict, notifier: Notifier, results: list) -> None:
+    """Log the sweep, update the state file / matrix, alert + escalate on availability, heartbeat."""
+    url = f"{cfg.base_url}/dashboard"
+    report = summarize(results)
+    top_n = cfg.notify.alert_top_n or len(results)
+    avail = [r for r in results[:top_n] if r.available]
+    log.info("result:\n%s", report)
+    lu = getattr(w, "last_updated", "")
+    log_event("check", f"Sweep done: {len(avail)} centre(s) with slots" + (f" (VFS updated {lu})" if lu else ""), "alert" if avail else "info",
+              {"results": [{"centre": short_centre(r.centre), "available": r.available,
+                            "earliest": r.earliest, "source": r.source, "error": r.error} for r in results]})
+    raw = getattr(w, "last_raw", {}) or {}
+    if raw:
+        categories, matrix = _matrix_from_raw(raw, cfg.centre_list)
+    else:
+        # login watcher: one column for the watched category, from the per-centre results
+        categories = [cfg.category or "D visa"]
+        matrix = [{"centre": short_centre(r.centre),
+                   "cells": {categories[0]: (r.earliest or "")}} for r in results]
+    _set(st, last_check_at=datetime.now().isoformat(timespec="seconds"), last_result=report,
+         vfs_updated=getattr(w, "last_updated", ""), mode=cfg.mode,
+         vfs_updated_value=raw.get("lastUpdatedValue"), vfs_updated_type=raw.get("lastUpdatedType"),
+         vfs_fetched_at=datetime.now().isoformat(timespec="seconds"),
+         earliest_categories=categories, earliest_matrix=matrix,
+         last_results=[{"centre": short_centre(r.centre), "available": r.available, "earliest": r.earliest,
+                        "error": r.error} for r in results])
+
+    if avail:
+        key = [[short_centre(r.centre), r.earliest] for r in avail]
+        if _should_alert(st, key, cfg.notify.cooldown_minutes):
+            nearest = avail[0]
+            headline = f"Nearest: {short_centre(nearest.centre)} — {nearest.earliest}"
+            sent = notifier.slot_found(f"{headline}\n\n{report}", url,
+                                       spoken=f"{short_centre(nearest.centre)}, {nearest.earliest}")
+            log_event("alert", f"SLOT ALERT sent via {', '.join(sent) or 'no channel'}: {headline}", "alert",
+                      {"channels": sent, "available": key}, w.screenshot("slot_found"))
+            _set(st, last_alert_at=datetime.now().isoformat(timespec="seconds"), last_alert_key=key,
+                 last_alert_channels=sent)
+            if cfg.whatsapp_web.enabled:
+                msg = ("\U0001F389 VFS SLOT OPEN\n"
+                       f"Centre: {short_centre(nearest.centre)}\n"
+                       f"Earliest: {nearest.earliest}\n"
+                       f"Category: {cfg.category}"
+                       + (f" / {cfg.subcategory}" if cfg.subcategory else "") + "\n"
+                       f"Checked: {datetime.now().strftime('%d-%m %H:%M')}\n\n"
+                       f"{report}\n\nBook now: {url}\nReply OK to stop the calls.")
+                _spawn_escalation(msg, short_centre(nearest.centre) + " " + str(nearest.earliest))
+        else:
+            log.info("same availability as last alert, within cooldown — not re-alerting")
+    else:
+        st.pop("last_alert_key", None)
+
+    hb = cfg.notify.heartbeat_hours
+    if hb and not avail:
+        last_hb = st.get("last_heartbeat_at")
+        if not last_hb or datetime.fromisoformat(last_hb) + timedelta(hours=hb) < datetime.now():
+            notifier.heartbeat(f"still watching, nothing yet.\n{report}")
+            _set(st, last_heartbeat_at=datetime.now().isoformat(timespec="seconds"))
 
 
 def cmd_whatsapp_setup(cfg: Config) -> int:
@@ -145,8 +219,150 @@ def cmd_watch(cfg: Config, secrets: Secrets, once: bool) -> int:
         from .public_watcher import PublicWatcher
         with PublicWatcher(cfg, secrets) as w:
             return watch_loop(w, cfg, secrets, once)
+    if cfg.rotation.enabled and AccountPool().accounts:
+        return rotate_loop(cfg, secrets, once)
     with Watcher(cfg, secrets) as w:
         return watch_loop(w, cfg, secrets, once)
+
+
+def rotate_loop(cfg: Config, secrets: Secrets, once: bool) -> int:
+    """Login mode with account rotation: every sweep opens a fresh browser for the least recently
+    used account (its own proxy/IP + profile), logs in, checks all centres, closes the browser.
+    Accounts whose login stalls (Cloudflare cool-off) or gets blocked are benched for a while."""
+    notifier = Notifier(cfg.notify, secrets)
+    st = _load_state()
+    consecutive_errors = 0
+    STOP_FILE.unlink(missing_ok=True)
+    _set(st, status="starting", task="preparing account rotation", pid=__import__("os").getpid(),
+         started_at=datetime.now().isoformat(timespec="seconds"), mode="login")
+    log_event("control", "Watcher started (account rotation)", "info")
+    direct_ip = _direct_ip(cfg.rotation.ip_check_url) if cfg.rotation.verify_ip else ""
+    if direct_ip:
+        log.info("machine's own IP: %s", direct_ip)
+        _set(st, direct_ip=direct_ip)
+
+    while True:
+        if STOP_FILE.exists():
+            STOP_FILE.unlink(missing_ok=True)
+            _set(st, status="stopped", task="")
+            log_event("control", "Watcher stopped", "info")
+            return 0
+        cfg = Config.load()
+        pool = AccountPool()
+        delay = next_delay(cfg)
+        acct = None
+        try:
+            allowed, why = in_run_window(cfg)
+            if PAUSE_FILE.exists():
+                _set(st, status="paused", task="paused by user")
+                delay = 30.0
+            elif not allowed:
+                _set(st, status="sleeping", task=f"outside run window ({why})")
+                delay = 30.0
+            elif not pool.accounts:
+                _set(st, status="error", task="no accounts configured — add them on the Settings tab")
+                delay = 60.0
+            else:
+                acct = pool.next(exclude=st.get("last_account_email", ""))
+                if acct is None:
+                    free_at = pool.next_free_at()
+                    _set(st, status="cooling", task="all accounts cooling off" + (f" until {free_at:%H:%M}" if free_at else ""),
+                         accounts=pool.status())
+                    delay = max(60.0, min(cfg.rotation.retry_minutes * 60.0,
+                                          (free_at - datetime.now()).total_seconds() + 5 if free_at else 60.0))
+                else:
+                    _run_sweep_as(acct, pool, cfg, secrets, st, notifier, direct_ip)
+                    consecutive_errors = 0
+                    _set(st, accounts=pool.status())
+        except ProxyError as e:
+            if acct is None:
+                raise
+            # the proxy is dead or leaking — bench this account briefly, move on quickly
+            until = pool.mark_cooloff(acct, 1.0, f"proxy: {e}")
+            log.error("proxy problem for %s: %s — benched until %s", acct.name, e, until.strftime("%H:%M"))
+            log_event("error", f"Proxy problem for {acct.name}: {e}", "error", {"until": until.isoformat()})
+            _set(st, status="error", task=f"proxy problem ({acct.name}) — trying next account", accounts=pool.status())
+            delay = 60.0
+        except CoolOff as e:
+            if acct is None:
+                raise
+            until = pool.mark_cooloff(acct, cfg.rotation.cooloff_hours, str(e))
+            log.error("COOL-OFF for %s: %s — benched until %s", acct.name, e, until.strftime("%H:%M"))
+            _set(st, status="cooling", task=f"{acct.name} in Cloudflare cool-off — next account in {cfg.rotation.retry_minutes} min",
+                 accounts=pool.status())
+            delay = cfg.rotation.retry_minutes * 60.0
+        except Blocked as e:
+            if acct is None:
+                raise
+            until = pool.mark_cooloff(acct, cfg.rotation.cooloff_hours, f"blocked: {e}")
+            consecutive_errors += 1
+            log.error("BLOCKED for %s: %s — benched until %s", acct.name, e, until.strftime("%H:%M"))
+            if consecutive_errors in (1, 5):
+                notifier.error(f"blocked by Cloudflare/WAF as {acct.name} ({e}); rotating")
+            _set(st, status="blocked", task=f"{acct.name} blocked — next account in {cfg.rotation.retry_minutes} min",
+                 accounts=pool.status())
+            delay = cfg.rotation.retry_minutes * 60.0
+        except LoginRequired as e:
+            if acct is None:
+                raise
+            what = "OTP" if isinstance(e, OtpRequired) else "login"
+            until = pool.mark_cooloff(acct, cfg.rotation.cooloff_hours / 2, f"{what} timed out")
+            log.warning("%s timed out for %s — benched until %s", what, acct.name, until.strftime("%H:%M"))
+            log_event("login", f"{what} timed out for {acct.name} — benched until {until:%H:%M}", "warn")
+            _set(st, status="error", task=f"{what} timed out ({acct.name}) — next account in {cfg.rotation.retry_minutes} min",
+                 accounts=pool.status())
+            delay = cfg.rotation.retry_minutes * 60.0
+        except KeyboardInterrupt:
+            _set(st, status="stopped", task="")
+            return 0
+        except Exception as e:  # noqa: BLE001
+            consecutive_errors += 1
+            log.exception("sweep failed (%d in a row)", consecutive_errors)
+            log_event("error", f"{type(e).__name__}: {str(e).splitlines()[0][:200]}", "error", {"consecutive": consecutive_errors})
+            _set(st, status="error", task=f"{type(e).__name__}: {str(e).splitlines()[0][:120]}")
+            if consecutive_errors in (3, 10, 30):
+                notifier.error(f"{consecutive_errors} consecutive failures: {e}")
+            delay = cfg.rotation.retry_minutes * 60.0
+
+        if once:
+            return 0
+        log.info("next sweep in %.0fs", delay)
+        try:
+            _sleep_keepalive(None, delay, st)
+        except KeyboardInterrupt:
+            _set(st, status="stopped", task="")
+            return 0
+
+
+def _run_sweep_as(acct, pool: AccountPool, cfg: Config, secrets: Secrets, st: dict, notifier: Notifier, direct_ip: str) -> None:
+    """One full sweep as `acct`: open browser -> verify IP -> login (+OTP) -> check all centres -> close."""
+    log.info("sweep as %s (%s)%s", acct.name, acct.email, " via proxy" if acct.proxy else "")
+    _set(st, status="running", task=f"opening browser as {acct.name}", account=acct.name,
+         account_email=acct.email, ip="")
+    with Watcher(cfg, secrets, account=acct) as w:
+        w.on_otp_required = lambda: (_set(st, status="needs_human", task=f"waiting for OTP ({acct.name})"),
+                                     notifier.otp_needed(str(OTP_FILE)))
+        w.on_human_needed = lambda what: (_set(st, status="needs_human", task=what), notifier.human_needed(what))
+        if cfg.rotation.verify_ip:
+            _set(st, task=f"checking IP for {acct.name}")
+            last_ip = st.get("last_ip", "")
+            ip = w.check_ip(must_differ_from=last_ip if acct.proxy else "")
+            if acct.proxy and direct_ip and ip == direct_ip:
+                raise ProxyError(f"proxy leaks: public IP {ip} is the machine's own IP")
+            if not acct.proxy:
+                log.warning("%s has no proxy — logging in from the machine's own IP %s", acct.name, ip)
+            _set(st, ip=ip)
+        pool.mark_used(acct, w.public_ip)
+        _set(st, last_account_email=acct.email, last_ip=w.public_ip, task=f"logging in as {acct.name}")
+        w.ensure_logged_in(wait_minutes=cfg.rotation.login_wait_minutes)
+        pool.mark_login_ok(acct)
+        n = len(cfg.centre_list)
+        burst = "  [burst]" if in_burst_window(cfg) else ""
+        _set(st, status="running", task=f"checking {n} centres as {acct.name}{burst}")
+        log.info("checking %d centres as %s%s", n, acct.name, burst)
+        results = w.check_all()
+        _handle_results(w, cfg, st, notifier, results)
+    log.info("browser closed (%s)", acct.name)
 
 
 def watch_loop(w: Watcher, cfg: Config, secrets: Secrets, once: bool) -> int:
@@ -192,61 +408,7 @@ def watch_loop(w: Watcher, cfg: Config, secrets: Secrets, once: bool) -> int:
                 log.info("checking %d centres%s", n, "  [burst]" if in_burst_window(cfg) else "")
                 results = w.check_all()
                 consecutive_errors = 0
-                report = summarize(results)
-                top_n = cfg.notify.alert_top_n or len(results)
-                avail = [r for r in results[:top_n] if r.available]
-                log.info("result:\n%s", report)
-                lu = getattr(w, "last_updated", "")
-                log_event("check", f"Sweep done: {len(avail)} centre(s) with slots" + (f" (VFS updated {lu})" if lu else ""), "alert" if avail else "info",
-                          {"results": [{"centre": short_centre(r.centre), "available": r.available,
-                                        "earliest": r.earliest, "source": r.source, "error": r.error} for r in results]})
-                raw = getattr(w, "last_raw", {}) or {}
-                if raw:
-                    categories, matrix = _matrix_from_raw(raw, cfg.centre_list)
-                else:
-                    # login watcher: one column for the watched category, from the per-centre results
-                    categories = [cfg.category or "D visa"]
-                    matrix = [{"centre": short_centre(r.centre),
-                               "cells": {categories[0]: (r.earliest or "")}} for r in results]
-                _set(st, last_check_at=datetime.now().isoformat(timespec="seconds"), last_result=report,
-                     vfs_updated=getattr(w, "last_updated", ""), mode=cfg.mode,
-                     vfs_updated_value=raw.get("lastUpdatedValue"), vfs_updated_type=raw.get("lastUpdatedType"),
-                     vfs_fetched_at=datetime.now().isoformat(timespec="seconds"),
-                     earliest_categories=categories, earliest_matrix=matrix,
-                     last_results=[{"centre": short_centre(r.centre), "available": r.available, "earliest": r.earliest,
-                                    "error": r.error} for r in results])
-
-                if avail:
-                    key = [[short_centre(r.centre), r.earliest] for r in avail]
-                    if _should_alert(st, key, cfg.notify.cooldown_minutes):
-                        nearest = avail[0]
-                        headline = f"Nearest: {short_centre(nearest.centre)} — {nearest.earliest}"
-                        sent = notifier.slot_found(f"{headline}\n\n{report}", url,
-                                                   spoken=f"{short_centre(nearest.centre)}, {nearest.earliest}")
-                        log_event("alert", f"SLOT ALERT sent via {', '.join(sent) or 'no channel'}: {headline}", "alert",
-                                  {"channels": sent, "available": key}, w.screenshot("slot_found"))
-                        _set(st, last_alert_at=datetime.now().isoformat(timespec="seconds"), last_alert_key=key,
-                             last_alert_channels=sent)
-                        if cfg.whatsapp_web.enabled:
-                            msg = ("\U0001F389 VFS SLOT OPEN\n"
-                                   f"Centre: {short_centre(nearest.centre)}\n"
-                                   f"Earliest: {nearest.earliest}\n"
-                                   f"Category: {cfg.category}"
-                                   + (f" / {cfg.subcategory}" if cfg.subcategory else "") + "\n"
-                                   f"Checked: {datetime.now().strftime('%d-%m %H:%M')}\n\n"
-                                   f"{report}\n\nBook now: {url}\nReply OK to stop the calls.")
-                            _spawn_escalation(msg, short_centre(nearest.centre) + " " + str(nearest.earliest))
-                    else:
-                        log.info("same availability as last alert, within cooldown — not re-alerting")
-                else:
-                    st.pop("last_alert_key", None)
-
-                hb = cfg.notify.heartbeat_hours
-                if hb and not avail:
-                    last_hb = st.get("last_heartbeat_at")
-                    if not last_hb or datetime.fromisoformat(last_hb) + timedelta(hours=hb) < datetime.now():
-                        notifier.heartbeat(f"still watching, nothing yet.\n{report}")
-                        _set(st, last_heartbeat_at=datetime.now().isoformat(timespec="seconds"))
+                _handle_results(w, cfg, st, notifier, results)
 
         except OtpRequired as e:
             log.warning("waiting for OTP: %s", e)

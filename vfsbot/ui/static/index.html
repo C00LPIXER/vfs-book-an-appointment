@@ -122,10 +122,12 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
         <button class="btn primary" id="btnStart">Start</button>
         <button class="btn" id="btnPause">Pause</button>
         <button class="btn danger" id="btnStop">Stop</button></div></div>
-    <div class="card" id="loginCard" style="border-color:var(--line2);display:none"><h3>Login watcher — amalkrishnap</h3>
+    <div class="card" id="loginCard" style="border-color:var(--line2);display:none"><h3>Login watcher — rotating accounts</h3>
       <div class="stat" id="lState">—</div>
       <div class="mono" id="lTask" style="color:var(--muted);margin:4px 0 2px"></div>
+      <div class="mono" id="lAccount" style="color:var(--muted)"></div>
       <div class="mono" id="lUpdated" style="color:var(--dim)"></div>
+      <div id="lAccounts" style="margin-top:8px"></div>
       <div class="row" style="margin-top:10px">
         <button class="btn primary" id="lStart">Start</button>
         <button class="btn" id="lPause">Pause</button>
@@ -137,7 +139,7 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
   </div>
 
   <div id="otpBox" class="otpbox" style="display:none;margin-bottom:14px">
-    <b>Login watcher needs an OTP.</b> VFS sent it to amalkrishnap's email/SMS/WhatsApp.
+    <b>Login watcher needs an OTP.</b> VFS sent it to <span id="otpWho">the account</span>'s email/SMS/WhatsApp.
     <div class="row" style="margin-top:8px"><input type="text" id="otpInput" placeholder="6-digit code" style="max-width:160px" class="mono"><button class="btn primary" id="otpBtn">Submit OTP</button></div>
   </div>
 
@@ -150,7 +152,7 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
   </div>
   <div class="card" id="loginMatrixCard" style="margin-bottom:14px;display:none">
     <div class="row" style="justify-content:space-between;margin-bottom:10px">
-      <h3 style="margin:0">Logged-in availability — amalkrishnap (real, post-login)</h3>
+      <h3 style="margin:0">Logged-in availability (real, post-login)</h3>
       <span class="mono" id="lmUpdated" style="color:var(--muted)"></span>
     </div>
     <div class="mwrap"><table class="matrix" id="lmatrix"><thead></thead><tbody></tbody></table></div>
@@ -166,7 +168,7 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
 <section class="tab" id="tab-settings">
   <div class="grid g2">
     <div class="card"><h3>VFS accounts</h3>
-      <div style="color:var(--muted);font-size:12px">Add one or more accounts. The first is used by the login watcher; the rest are stored for booking. Watching itself needs no account.</div>
+      <div style="color:var(--muted);font-size:12px">The login watcher rotates through these: every sweep signs in with the least recently used account, through its own proxy (= its own IP) and browser profile, then closes the browser. IMAP = that account's Gmail App Password for auto-OTP (user defaults to the email). Proxy: <span class="mono">socks5://user:pass@host:port</span> or <span class="mono">http://…</span>; leave empty to use the machine's IP.</div>
       <div id="acctList" style="margin-top:8px"></div>
       <div class="row" style="margin-top:8px"><button class="btn" id="acctAdd">+ Add account</button><button class="btn primary" id="acctSave">Save accounts</button></div>
       <h3 style="margin-top:16px">Passport bio page</h3>
@@ -237,6 +239,16 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
         <div style="flex:1"><label>Wait between calls (s)</label><input type="number" id="w_call_interval_seconds" min="30"></div>
         <div style="flex:1"><label>Ring for (s)</label><input type="number" id="w_ring_seconds" min="5" max="60"></div></div>
       <div class="row" style="margin-top:10px"><button class="btn" id="waTestBtn">Send a real test now to this contact</button></div>
+    </div>
+
+    <div class="card"><h3>Login watcher — account rotation</h3>
+      <div style="color:var(--muted);font-size:12px">Each sweep uses a different account + proxy IP and closes the browser afterwards. If Cloudflare's widget stays blank (cool-off) or a login stalls, that account is benched (cool-off doubles on every consecutive failure, max 24 h) and the next one is tried after the retry delay.</div>
+      <div class="check" style="margin-top:8px"><input type="checkbox" id="r_enabled"><span>Rotate accounts (off = single account from .env, session kept open)</span></div>
+      <div class="check"><input type="checkbox" id="r_verify_ip"><span>Verify the public IP through the proxy before every login</span></div>
+      <div class="check"><input type="checkbox" id="r_require_proxy"><span>Refuse to log in with an account that has no proxy</span></div>
+      <div class="row"><div style="flex:1"><label>Login/OTP wait (min)</label><input type="number" id="r_login_wait_minutes" min="1" max="15"></div>
+        <div style="flex:1"><label>Cool-off (hours)</label><input type="number" id="r_cooloff_hours" min="0.5" step="0.5"></div>
+        <div style="flex:1"><label>Retry next account after (min)</label><input type="number" id="r_retry_minutes" min="1"></div></div>
     </div>
   </div>
   <div class="row" style="margin-top:14px"><button class="btn primary" id="saveBtn">Save settings</button><span class="mono" style="color:var(--muted)">Saved settings are picked up by the running bot on its next cycle.</span></div>
@@ -325,6 +337,11 @@ async function loadStatus() {
     $('#lState').textContent = lstatus.replace('_', ' ');
     $('#lTask').textContent = L.running ? (lst.task || '—') : 'not running';
     $('#lUpdated').textContent = lst.last_check_at ? 'last check ' + fmt(lst.last_check_at) : '';
+    $('#lAccount').textContent = L.running && lst.account ? `account: ${lst.account}` + (lst.ip ? `  ·  ip ${lst.ip}` : '') : '';
+    $('#otpWho').textContent = lst.account || 'the account';
+    const accs = lst.accounts || [];
+    $('#lAccounts').innerHTML = accs.length ? `<table><thead><tr><th>Account</th><th>Last login</th><th>IP</th><th>Status</th></tr></thead><tbody>` +
+      accs.map(a => `<tr><td>${a.name}${a.has_proxy ? '' : ' <span class="tag none" title="no proxy">no proxy</span>'}</td><td class="mono">${a.last_login_at ? fmt(a.last_login_at) : '—'}</td><td class="mono">${a.last_ip || '—'}</td><td>${!a.enabled ? '<span class="tag none">off</span>' : a.cooldown_until ? `<span class="tag err" title="${(a.last_error||'').replace(/"/g,'&quot;')}">cool-off until ${fmt(a.cooldown_until)}</span>` : '<span class="tag ok">ready</span>'}</td></tr>`).join('') + '</tbody></table>' : '';
     $('#lStart').disabled = L.running; $('#lStop').disabled = !L.running;
     $('#lPause').textContent = L.paused ? 'Resume' : 'Pause';
     // login availability section
@@ -369,22 +386,43 @@ function renderCentres() {
 }
 function renderSubcats() { const cat = $('#c_category').value; const subs = CATS[cat] || []; $('#c_subcategory').innerHTML = '<option value="">(first option)</option>' + subs.map(s => `<option ${s === CFG.subcategory ? 'selected' : ''}>${s}</option>`).join(''); }
 let ACCOUNTS = [];
+const esc = (v) => (v || '').replace(/"/g, '&quot;');
+function acctStatusLine(a) {
+  const s = a.status || {};
+  if (!s.email) return '';
+  const bits = [];
+  bits.push(s.logins ? `${s.logins} login(s), last ${fmt(s.last_login_at)}` : 'never logged in');
+  if (s.last_ip) bits.push('ip ' + s.last_ip);
+  if (s.cooldown_until) bits.push(`<span class="tag err">cool-off until ${fmt(s.cooldown_until)}</span> ${esc(s.last_error || '')} <button class="btn acc-clear" data-clear="${esc(a.email)}">clear</button>`);
+  return `<div class="mono" style="color:var(--dim);font-size:11px;margin:2px 0 0 4px">${bits.join('  ·  ')}</div>`;
+}
 function renderAccounts() {
   $('#acctList').innerHTML = ACCOUNTS.map((a, i) => `
-    <div class="row" data-ai="${i}" style="margin:6px 0;gap:6px;align-items:center">
-      <input type="text" class="acc-label" placeholder="Label (e.g. Client 1)" value="${(a.label||'').replace(/"/g,'&quot;')}" style="flex:1">
-      <input type="text" class="acc-email" placeholder="email" value="${(a.email||'').replace(/"/g,'&quot;')}" style="flex:2" autocomplete="off">
-      <input type="password" class="acc-pass" placeholder="password" value="${(a.password||'').replace(/"/g,'&quot;')}" style="flex:2" autocomplete="new-password">
-      <button class="btn acc-del" data-del="${i}" title="remove">✕</button>
+    <div data-ai="${i}" style="margin:8px 0;padding:8px;border:1px solid var(--line);border-radius:8px">
+      <div class="row" style="gap:6px;align-items:center">
+        <input type="checkbox" class="acc-on" ${a.enabled === false ? '' : 'checked'} title="enabled">
+        <input type="text" class="acc-label" placeholder="Label (e.g. Amal)" value="${esc(a.label)}" style="flex:1">
+        <input type="text" class="acc-email" placeholder="VFS email" value="${esc(a.email)}" style="flex:2" autocomplete="off">
+        <input type="password" class="acc-pass" placeholder="VFS password" value="${esc(a.password)}" style="flex:2" autocomplete="new-password">
+        <button class="btn acc-del" data-del="${i}" title="remove">✕</button>
+      </div>
+      <div class="row" style="gap:6px;align-items:center;margin-top:6px">
+        <input type="text" class="acc-imap" placeholder="IMAP user (default: email)" value="${esc(a.imap_user)}" style="flex:2" autocomplete="off">
+        <input type="password" class="acc-imappw" placeholder="Gmail App Password (auto-OTP)" value="${esc(a.imap_password)}" style="flex:2" autocomplete="new-password">
+        <input type="text" class="acc-proxy" placeholder="proxy  socks5://user:pass@host:port" value="${esc(a.proxy)}" style="flex:3" autocomplete="off">
+      </div>${acctStatusLine(a)}
     </div>`).join('') || '<div class="mono" style="color:var(--dim)">No accounts yet — click “Add account”.</div>';
   document.querySelectorAll('.acc-del').forEach(b => b.onclick = () => { ACCOUNTS.splice(+b.dataset.del, 1); readAccountInputs(); renderAccounts(); });
+  document.querySelectorAll('.acc-clear').forEach(b => b.onclick = async () => { await api('/api/accounts/clear-cooloff', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: b.dataset.clear }) }); toast('Cool-off cleared'); loadAccounts(); });
 }
 function readAccountInputs() {
   const rows = [...document.querySelectorAll('#acctList [data-ai]')];
-  ACCOUNTS = rows.map(r => ({ label: r.querySelector('.acc-label').value, email: r.querySelector('.acc-email').value, password: r.querySelector('.acc-pass').value }));
+  ACCOUNTS = rows.map((r, i) => ({ label: r.querySelector('.acc-label').value, email: r.querySelector('.acc-email').value, password: r.querySelector('.acc-pass').value,
+    imap_user: r.querySelector('.acc-imap').value, imap_password: r.querySelector('.acc-imappw').value, proxy: r.querySelector('.acc-proxy').value,
+    enabled: r.querySelector('.acc-on').checked, status: (ACCOUNTS[i] || {}).status }));
 }
 async function loadAccounts() { ACCOUNTS = await api('/api/accounts'); renderAccounts(); }
-$('#acctAdd').onclick = () => { readAccountInputs(); ACCOUNTS.push({ label: '', email: '', password: '' }); renderAccounts(); };
+$('#acctAdd').onclick = () => { readAccountInputs(); ACCOUNTS.push({ label: '', email: '', password: '', imap_user: '', imap_password: '', proxy: '', enabled: true }); renderAccounts(); };
 $('#acctSave').onclick = async () => { readAccountInputs(); try { const r = await api('/api/accounts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accounts: ACCOUNTS.filter(a => a.email.trim()) }) }); toast('Saved ' + r.count + ' account(s)'); loadAccounts(); } catch (e) { toast(e.message); } };
 async function loadConfig() {
   const d = await api('/api/config'); CFG = d.config; CATS = d.categories;
@@ -402,6 +440,9 @@ async function loadConfig() {
   const w = CFG.whatsapp_web || {};
   $('#w_enabled').checked = !!w.enabled; $('#w_chat').value = w.chat || ''; $('#w_ack_keyword').value = w.ack_keyword || 'ok';
   $('#w_call_attempts').value = w.call_attempts ?? 3; $('#w_call_interval_seconds').value = w.call_interval_seconds ?? 120; $('#w_ring_seconds').value = w.ring_seconds ?? 25;
+  const r = CFG.rotation || {};
+  $('#r_enabled').checked = r.enabled !== false; $('#r_verify_ip').checked = r.verify_ip !== false; $('#r_require_proxy').checked = !!r.require_proxy;
+  $('#r_login_wait_minutes').value = r.login_wait_minutes ?? 3; $('#r_cooloff_hours').value = r.cooloff_hours ?? 2; $('#r_retry_minutes').value = r.retry_minutes ?? 5;
   await loadAccounts();
   const pi = await api('/api/passport'); $('#passportInfo').textContent = pi.exists ? `current: ${pi.path} (${Math.round(pi.size / 1024)} KB)` : 'no passport file uploaded yet';
 }
@@ -415,6 +456,7 @@ $('#saveBtn').onclick = async () => {
     for (const k of ['cooldown_minutes', 'heartbeat_hours', 'alert_top_n']) CFG.notify[k] = +$('#n_' + k).value;
     CFG.notify.quiet_hours_from = $('#n_quiet_hours_from').value; CFG.notify.quiet_hours_to = $('#n_quiet_hours_to').value;
     CFG.whatsapp_web = { ...CFG.whatsapp_web, enabled: $('#w_enabled').checked, chat: $('#w_chat').value, ack_keyword: $('#w_ack_keyword').value, call_attempts: +$('#w_call_attempts').value, call_interval_seconds: +$('#w_call_interval_seconds').value, ring_seconds: +$('#w_ring_seconds').value };
+    CFG.rotation = { ...CFG.rotation, enabled: $('#r_enabled').checked, verify_ip: $('#r_verify_ip').checked, require_proxy: $('#r_require_proxy').checked, login_wait_minutes: +$('#r_login_wait_minutes').value, cooloff_hours: +$('#r_cooloff_hours').value, retry_minutes: +$('#r_retry_minutes').value };
     const secrets = {}; document.querySelectorAll('[id^="s_"]').forEach(el => { if (el) secrets[el.id.slice(2)] = el.value; });
     await api('/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: CFG, secrets }) });
     toast('Settings saved');

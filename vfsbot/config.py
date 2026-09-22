@@ -77,6 +77,18 @@ class BrowserConfig(BaseModel):
     executable: str = ""
 
 
+class RotationConfig(BaseModel):
+    """Login mode: sign in with a different account (own proxy/IP + browser profile) on every sweep,
+    then close the browser. Accounts are managed on the dashboard (state/accounts.json)."""
+    enabled: bool = True
+    login_wait_minutes: int = 3        # give up on Cloudflare/OTP after this and move to the next account
+    cooloff_hours: float = 2.0         # base cool-off for an account whose login stalled/blocked (doubles per fail)
+    retry_minutes: int = 5             # wait this long before trying the next account after a failure
+    verify_ip: bool = True             # look up the public IP through the proxy before logging in
+    require_proxy: bool = False        # refuse to log in when an account has no proxy configured
+    ip_check_url: str = "https://api.ipify.org?format=json"
+
+
 class Config(BaseModel):
     mode: str = "public"   # "public" = no-login earliest-date endpoint (recommended); "login" = old flow
     base_url: str = "https://visa.vfsglobal.com/ind/en/bgr"
@@ -92,6 +104,7 @@ class Config(BaseModel):
     notify: NotifyConfig = Field(default_factory=NotifyConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     whatsapp_web: WhatsAppWebConfig = Field(default_factory=WhatsAppWebConfig)
+    rotation: RotationConfig = Field(default_factory=RotationConfig)
     passport_file: str = "documents/passport_bio.jpg"
     team: str = "4indegree · AAI (Anas and Amal Intelligence)"
 
