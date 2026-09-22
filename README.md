@@ -183,8 +183,15 @@ create instance tagged `vfs-proxy` (DigitalOcean `blr1` / `s-1vcpu-512mb-10gb`, 
 `ssh -N -D 127.0.0.1:<18000+i>` detached → set the account's proxy to `socks5://127.0.0.1:<port>`
 (`proxy_auto: true`). `Watcher.__enter__` calls `ensure_tunnel()` for auto accounts, so a dead tunnel
 is restarted right before the browser launches. Records in `data/proxies.json`; `vfsbot proxies
-status|provision|destroy|tunnels`. A proxy typed by hand into the account overrides auto. Datacenter
-IPs draw more Turnstile challenges than residential ones.
+status|provision|destroy|tunnels|attach|key`. A proxy typed by hand into the account overrides auto.
+Datacenter IPs draw more Turnstile challenges than residential ones.
+
+Own / free-tier servers (`provider: manual`): create the VM yourself (Oracle Cloud Always-Free has
+Mumbai/Hyderabad; AWS free tier has Mumbai), add `data/proxy_key.pub` (shown on the dashboard) as
+its SSH key, then *Attach server to account* with its IP + SSH user (`ubuntu` / `opc` / `root`). The
+bot verifies SSH, records `{provider: manual, ip, user, ssh_port}` and runs the same tunnel;
+*Detach* only drops the tunnel, your server is left running. Free VPN services are unsuitable:
+shared, already-challenged IPs that change between connections (`cf_clearance` is IP-bound).
 
 After a failure the next account is tried after `retry_minutes` (5); if every account is benched the
 watcher sleeps until the first one frees. `cf_clearance` is IP+UA bound, so the pairing

@@ -203,23 +203,36 @@ def _port_open(port: int, host: str = "127.0.0.1", timeout: float = 1.0) -> bool
         return False
 
 
-def _ssh_base(ip: str) -> list[str]:
-    return ["ssh", "-i", str(KEY_FILE), "-o", "StrictHostKeyChecking=accept-new",
+def _ssh_base(ip: str, user: str = "root", port: int = 22) -> list[str]:
+    return ["ssh", "-i", str(KEY_FILE), "-p", str(port), "-o", "StrictHostKeyChecking=accept-new",
             "-o", f"UserKnownHostsFile={DATA_DIR / 'proxy_known_hosts'}",
             "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
-            "-o", "ConnectTimeout=15", "-o", "BatchMode=yes", f"root@{ip}"]
+            "-o", "ConnectTimeout=15", "-o", "BatchMode=yes", f"{user}@{ip}"]
 
 
-def wait_for_ssh(ip: str, timeout: int = 240) -> bool:
+def _ssh_for(rec: dict) -> list[str]:
+    return _ssh_base(rec["ip"], rec.get("user") or "root", int(rec.get("ssh_port") or 22))
+
+
+def wait_for_ssh(ip: str, timeout: int = 240, user: str = "root", port: int = 22) -> bool:
     """Wait for sshd on the new server and for our key to be accepted."""
     end = time.time() + timeout
     while time.time() < end:
-        if _tcp(ip, 22):
-            r = subprocess.run(_ssh_base(ip) + ["true"], capture_output=True, timeout=30)
+        if _tcp(ip, port):
+            r = subprocess.run(_ssh_base(ip, user, port) + ["true"], capture_output=True, timeout=30)
             if r.returncode == 0:
                 return True
         time.sleep(5)
     return False
+
+
+def ssh_check(rec: dict) -> tuple[bool, str]:
+    """One SSH round-trip with our key; returns (ok, stderr tail)."""
+    try:
+        r = subprocess.run(_ssh_for(rec) + ["true"], capture_output=True, text=True, timeout=30)
+        return r.returncode == 0, (r.stderr or "").strip().splitlines()[-1:] and (r.stderr or "").strip().splitlines()[-1] or ""
+    except subprocess.TimeoutExpired:
+        return False, "timed out"
 
 
 def _tcp(host: str, port: int) -> bool:
@@ -240,7 +253,7 @@ def ensure_tunnel(email: str, wait: float = 20) -> str:
     if not _port_open(port):
         log.info("starting SOCKS tunnel for %s: 127.0.0.1:%d -> %s", email, port, rec["ip"])
         logf = open(DATA_DIR / "tunnels.log", "a")
-        subprocess.Popen(_ssh_base(rec["ip"]) + ["-N", "-D", f"127.0.0.1:{port}", "-o", "ExitOnForwardFailure=yes"],
+        subprocess.Popen(_ssh_for(rec) + ["-N", "-D", f"127.0.0.1:{port}", "-o", "ExitOnForwardFailure=yes"],
                          stdout=logf, stderr=logf, stdin=subprocess.DEVNULL, start_new_session=True)
         end = time.time() + wait
         while time.time() < end and not _port_open(port):
@@ -282,6 +295,10 @@ def provision(cfg, email: str, progress=lambda msg: None) -> dict:
     prov = get_provider(cfg)
     proxies = load_proxies()
     rec = proxies.get(email)
+    if rec and rec.get("provider") == "manual":
+        progress(f"{email}: uses your own server {rec['ip']} — nothing to provision")
+        _set_account_proxy(email, ensure_tunnel(email), True)
+        return rec
     if rec and rec.get("provider") == prov.name and rec.get("ip"):
         try:
             state, ip = prov.status(rec["instance_id"])
@@ -325,12 +342,42 @@ def provision(cfg, email: str, progress=lambda msg: None) -> dict:
     return rec
 
 
+def attach_manual(email: str, ip: str, user: str = "root", ssh_port: int = 22, progress=lambda msg: None) -> dict:
+    """Use a server you created yourself (e.g. Oracle Cloud Always-Free in Mumbai, AWS free tier):
+    add data/proxy_key.pub to it, then give the bot its IP. The bot checks SSH, starts the tunnel
+    and assigns the proxy to the account."""
+    ensure_keypair()
+    ip = ip.strip(); user = (user or "root").strip()
+    if not ip:
+        raise RuntimeError("server IP is empty")
+    rec = {"provider": "manual", "instance_id": "", "ip": ip, "user": user, "ssh_port": int(ssh_port or 22),
+           "port": port_for(email), "created_at": datetime.now().isoformat(timespec="seconds")}
+    progress(f"{email}: checking SSH to {user}@{ip}:{rec['ssh_port']} with the bot's key")
+    if not _tcp(ip, rec["ssh_port"]):
+        raise RuntimeError(f"{ip}:{rec['ssh_port']} is not reachable — is the VM up and port {rec['ssh_port']} open in its firewall/security list?")
+    ok, err = ssh_check(rec)
+    if not ok:
+        raise RuntimeError(f"SSH to {user}@{ip} refused our key ({err or 'no details'}) — add the public key shown on the dashboard to that user's ~/.ssh/authorized_keys")
+    stop_tunnel(email)
+    proxies = load_proxies(); proxies[email] = rec; save_proxies(proxies)
+    url = ensure_tunnel(email)
+    _set_account_proxy(email, url, True)
+    progress(f"{email}: proxy ready → {url} (exit IP {ip})")
+    return rec
+
+
+def public_key() -> str:
+    return ensure_keypair()
+
+
 def deprovision(cfg, email: str, progress=lambda msg: None) -> None:
     proxies = load_proxies()
     rec = proxies.pop(email, None)
     save_proxies(proxies)
     stop_tunnel(email)
-    if rec:
+    if rec and rec.get("provider") == "manual":
+        progress(f"{email}: detached from {rec.get('ip')} (your own server is left running)")
+    elif rec:
         try:
             get_provider(cfg).delete(rec["instance_id"])
             progress(f"{email}: server {rec.get('ip')} destroyed")
@@ -380,5 +427,6 @@ def status(cfg=None) -> list[dict]:
         email = a["email"]; rec = proxies.get(email, {})
         out.append({"email": email, "label": a.get("label", ""), "proxy": (a.get("proxy") or ""),
                     "auto": bool(a.get("proxy_auto")), "server_ip": rec.get("ip", ""), "provider": rec.get("provider", ""),
+                    "ssh_user": rec.get("user", "root"),
                     "tunnel_up": bool(rec) and _port_open(rec.get("port", 0)), "created_at": rec.get("created_at")})
     return out

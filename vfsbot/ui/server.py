@@ -366,7 +366,18 @@ def _prov_run(fn) -> None:
 def proxies_status():
     from .. import proxies
     return {"token_set": bool(proxies.load_token()), "running": _prov_state["running"],
-            "log": _prov_state["log"], "accounts": proxies.status(), "providers": list(proxies.PROVIDERS)}
+            "log": _prov_state["log"], "accounts": proxies.status(), "providers": list(proxies.PROVIDERS),
+            "public_key": proxies.public_key()}
+
+
+@app.post("/api/proxies/manual")
+def proxies_manual(body: dict):
+    """Attach a server you created yourself (free tier etc.) to an account."""
+    from .. import proxies
+    email, ip, user = (body.get("email") or "").strip(), (body.get("ip") or "").strip(), (body.get("user") or "root").strip()
+    port = int(body.get("ssh_port") or 22)
+    _prov_run(lambda cfg, log: proxies.attach_manual(email, ip, user, port, log))
+    return {"ok": True}
 
 
 class ProxyToken(BaseModel):

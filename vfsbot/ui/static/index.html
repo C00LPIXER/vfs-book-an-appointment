@@ -216,6 +216,16 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
       <div class="check" style="margin-top:8px"><input type="checkbox" id="p_enabled"><span>Auto-provision: the login watcher creates a server for any account without a proxy before using it</span></div>
       <div class="row" style="margin-top:8px"><button class="btn" id="pProvision">Provision now for all accounts without a proxy</button><button class="btn danger" id="pDestroy">Destroy all servers</button><span class="mono" id="pState" style="color:var(--muted)"></span></div>
       <div id="pTable" style="margin-top:10px"></div>
+      <h3 style="margin-top:16px">Or use your own / free-tier servers (₹0)</h3>
+      <div style="color:var(--muted);font-size:13px"><b>Oracle Cloud Always Free</b> gives 2 small VMs for free forever in <b>Mumbai / Hyderabad</b>; <b>AWS Free Tier</b> gives 1 VM in Mumbai for 12 months. Create the VM (Ubuntu), paste the bot's public key below as the SSH key, allow port 22, then give the bot the VM's public IP — it checks SSH, opens the tunnel and assigns the proxy to the account. SSH user: <span class="mono">ubuntu</span> on Ubuntu images, <span class="mono">opc</span> on Oracle Linux, <span class="mono">root</span> on most others.</div>
+      <label>Bot's public SSH key — add this to the VM when creating it (or to <span class="mono">~/.ssh/authorized_keys</span>)</label>
+      <div class="row"><input type="text" id="pPubKey" readonly class="mono" style="flex:1" onclick="this.select()"><button class="btn" id="pCopyKey">Copy</button></div>
+      <div class="fields" style="grid-template-columns:2fr 2fr 1fr auto;margin-top:8px">
+        <div><label>Account</label><select id="pmAccount"></select></div>
+        <div><label>Server public IP</label><input type="text" id="pmIp" placeholder="e.g. 152.67.x.x"></div>
+        <div><label>SSH user</label><input type="text" id="pmUser" value="ubuntu"></div>
+        <button class="btn primary" id="pmAttach" style="margin-bottom:1px">Attach server to account</button>
+      </div>
       <div class="logbox" id="pLog" style="max-height:160px;margin-top:10px;display:none"></div>
     </div>
 
@@ -466,7 +476,9 @@ async function loadProxies() {
     $('#p_token').placeholder = d.token_set ? 'token saved — paste a new one to replace' : 'paste token — stored in data/proxy_provider.json';
     $('#pState').textContent = d.running ? 'working…' : '';
     $('#pProvision').disabled = d.running || !d.token_set; $('#pDestroy').disabled = d.running || !d.token_set;
-    $('#pTable').innerHTML = d.accounts.length ? `<table><thead><tr><th>Account</th><th>Proxy</th><th>Server IP</th><th>Tunnel</th><th></th></tr></thead><tbody>` + d.accounts.map(a => `<tr><td>${esc(a.label) || esc(a.email)}</td><td class="mono">${a.proxy ? esc(a.proxy) + (a.auto ? ' <span class="tag ok">auto</span>' : ' <span class="tag none">manual</span>') : '<span class="tag err">none</span>'}</td><td class="mono">${a.server_ip || '—'}</td><td>${a.server_ip ? (a.tunnel_up ? '<span class="tag ok">up</span>' : '<span class="tag none">down (starts on demand)</span>') : '—'}</td><td class="row">${!a.proxy ? `<button class="btn p-prov" data-email="${esc(a.email)}" ${d.running || !d.token_set ? 'disabled' : ''}>Provision</button>` : ''}${a.server_ip ? `<button class="btn danger p-destroy" data-email="${esc(a.email)}" ${d.running ? 'disabled' : ''}>Destroy</button>` : ''}</td></tr>`).join('') + '</tbody></table>' : '';
+    $('#pPubKey').value = d.public_key || '';
+    const sel = $('#pmAccount'); const cur = sel.value; sel.innerHTML = d.accounts.map(a => `<option value="${esc(a.email)}">${esc(a.label) || esc(a.email)}</option>`).join(''); if (cur) sel.value = cur;
+    $('#pTable').innerHTML = d.accounts.length ? `<table><thead><tr><th>Account</th><th>Proxy</th><th>Server IP</th><th>Tunnel</th><th></th></tr></thead><tbody>` + d.accounts.map(a => `<tr><td>${esc(a.label) || esc(a.email)}</td><td class="mono">${a.proxy ? esc(a.proxy) + (a.auto ? ' <span class="tag ok">auto</span>' : ' <span class="tag none">manual</span>') : '<span class="tag err">none</span>'}</td><td class="mono">${a.server_ip ? esc(a.server_ip) + (a.provider === 'manual' ? ' <span class="tag none">own server</span>' : ` <span class="tag none">${esc(a.provider)}</span>`) : '—'}</td><td>${a.server_ip ? (a.tunnel_up ? '<span class="tag ok">up</span>' : '<span class="tag none">down (starts on demand)</span>') : '—'}</td><td class="row">${!a.proxy ? `<button class="btn p-prov" data-email="${esc(a.email)}" ${d.running || !d.token_set ? 'disabled' : ''}>Provision</button>` : ''}${a.server_ip ? `<button class="btn danger p-destroy" data-email="${esc(a.email)}" ${d.running ? 'disabled' : ''}>${a.provider === 'manual' ? 'Detach' : 'Destroy'}</button>` : ''}</td></tr>`).join('') + '</tbody></table>' : '';
     const lg = $('#pLog'); if (d.log.length) { lg.style.display = 'block'; lg.textContent = d.log.join('\n'); lg.scrollTop = lg.scrollHeight; }
     document.querySelectorAll('.p-prov').forEach(b => b.onclick = () => provAction('/api/proxies/provision', { email: b.dataset.email }, 'Provisioning ' + b.dataset.email + '…'));
     document.querySelectorAll('.p-destroy').forEach(b => b.onclick = () => { if (confirm('Destroy the server for ' + b.dataset.email + '?')) provAction('/api/proxies/destroy', { email: b.dataset.email }, 'Destroying…'); });
@@ -481,6 +493,8 @@ $('#pSave').onclick = async () => {
     await api('/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: CFG }) });
     toast('Proxy settings saved'); loadProxies();
   } catch (e) { toast(e.message); } };
+$('#pCopyKey').onclick = () => { navigator.clipboard.writeText($('#pPubKey').value).then(() => toast('Public key copied')); };
+$('#pmAttach').onclick = () => { const email = $('#pmAccount').value, ip = $('#pmIp').value.trim(), user = $('#pmUser').value.trim() || 'root'; if (!email || !ip) return toast('Pick an account and enter the server IP'); provAction('/api/proxies/manual', { email, ip, user }, 'Attaching ' + ip + ' — watch the log'); };
 $('#pProvision').onclick = () => provAction('/api/proxies/provision', {}, 'Provisioning servers for all accounts without a proxy — watch the log below');
 $('#pDestroy').onclick = () => { if (confirm('Destroy ALL auto-provisioned servers? Accounts go back to no proxy.')) provAction('/api/proxies/destroy', {}, 'Destroying all servers…'); };
 async function loadAccounts() { ACCOUNTS = await api('/api/accounts'); renderAccounts(); }

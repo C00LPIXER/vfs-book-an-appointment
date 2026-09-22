@@ -496,7 +496,7 @@ def cmd_ip(cfg: Config, email: str, as_json: bool) -> int:
     return 0 if all(r["ok"] for r in out) else 1
 
 
-def cmd_proxies(cfg: Config, action: str, email: str) -> int:
+def cmd_proxies(cfg: Config, action: str, email: str, ip: str = "", user: str = "root") -> int:
     from . import proxies
     say = lambda m: print(m)  # noqa: E731
     if action == "status":
@@ -513,6 +513,10 @@ def cmd_proxies(cfg: Config, action: str, email: str) -> int:
             for e in list(proxies.load_proxies()):
                 proxies.deprovision(cfg, e, say)
             proxies.cleanup_orphans(cfg, say)
+    elif action == "attach":
+        proxies.attach_manual(email, ip, user, 22, say)
+    elif action == "key":
+        print(proxies.public_key())
     elif action == "tunnels":
         for e in proxies.load_proxies():
             print(e, proxies.ensure_tunnel(e))
@@ -540,8 +544,10 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--curl", action="store_true", help="print the full curl command (all headers + cookies)")
     sub.add_parser("whatsapp-setup", help="open WhatsApp Web once to link it (QR scan)")
     pp = sub.add_parser("proxies", help="automatic per-account proxy servers")
-    pp.add_argument("action", choices=["status", "provision", "destroy", "tunnels"])
+    pp.add_argument("action", choices=["status", "provision", "destroy", "tunnels", "attach", "key"])
     pp.add_argument("--account", default="", help="only this account (email)")
+    pp.add_argument("--ip", default="", help="attach: your own server's IP")
+    pp.add_argument("--user", default="root", help="attach: SSH user on that server (ubuntu / opc / root)")
     ipp = sub.add_parser("ip", help="show the public IP each account gets through its proxy")
     ipp.add_argument("--account", default="", help="only this account (email)")
     ipp.add_argument("--json", action="store_true")
@@ -580,7 +586,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "earliest":
         return cmd_earliest(cfg, a.category, a.json, a.available, a.curl)
     if a.cmd == "proxies":
-        return cmd_proxies(cfg, a.action, a.account)
+        return cmd_proxies(cfg, a.action, a.account, a.ip, a.user)
     if a.cmd == "ip":
         logging.getLogger().setLevel(logging.WARNING)
         return cmd_ip(cfg, a.account, a.json)
