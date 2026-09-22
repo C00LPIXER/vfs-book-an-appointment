@@ -370,6 +370,20 @@ def proxies_status():
             "public_key": proxies.public_key()}
 
 
+@app.post("/api/ip-rotate/test")
+def ip_rotate_test():
+    """Run the IP rotation command once and report before/after (blocks up to ~2 min)."""
+    from ..cli import _direct_ip, rotate_ip
+    from ..watcher import ProxyError
+    cfg = Config.load()
+    before = _direct_ip(cfg.rotation.ip_check_url)
+    try:
+        after = rotate_ip(cfg, before)
+        return {"ok": after != before, "before": before, "after": after}
+    except ProxyError as e:
+        return {"ok": False, "before": before, "after": "", "error": str(e)}
+
+
 @app.post("/api/proxies/manual")
 def proxies_manual(body: dict):
     """Attach a server you created yourself (free tier etc.) to an account."""

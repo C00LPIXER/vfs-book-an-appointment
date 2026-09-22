@@ -229,6 +229,18 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
       <div class="logbox" id="pLog" style="max-height:160px;margin-top:10px;display:none"></div>
     </div>
 
+    <div class="card wide"><h3>Free IP rotation — Android phone on USB (or any VPN CLI)</h3>
+      <div style="color:var(--muted);font-size:13px">No server, no signup: plug an Android phone with a SIM into this machine, enable <b>USB debugging</b> and <b>USB tethering</b>, install <span class="mono">adb</span> (<span class="mono">sudo dnf install android-tools</span>). Before every login the bot switches the phone's mobile data off and on, which gives a <b>new carrier IP</b> — the kind of IP Cloudflare trusts most — and refuses to log in if the IP didn't change. The machine must be using the phone's connection (USB tethering becomes the default route while plugged in). Any VPN CLI works in the command box too, e.g. <span class="mono">protonvpn-cli c -r</span>.</div>
+      <div class="fields" style="grid-template-columns:4fr 1fr auto auto;margin-top:10px">
+        <div><label>Command to get a new IP</label><input type="text" id="ir_command" class="mono"></div>
+        <div><label>Timeout (s)</label><input type="number" id="ir_timeout" min="10" max="600"></div>
+        <label class="check" style="margin:0 0 8px"><input type="checkbox" id="ir_require"><span>IP must change</span></label>
+        <button class="btn" id="irTest" style="margin-bottom:1px">Test now</button>
+      </div>
+      <div class="check" style="margin-top:8px"><input type="checkbox" id="ir_enabled"><span>Rotate IP before every login (used for accounts that have no proxy of their own)</span></div>
+      <div class="mono" id="irResult" style="color:var(--muted);margin-top:6px"></div>
+    </div>
+
     <div class="card"><h3>Visa &amp; centres</h3>
       <label>Appointment category</label><select id="c_category"></select>
       <label>Sub-category (empty = first option)</label><select id="c_subcategory"></select>
@@ -496,6 +508,9 @@ $('#pSave').onclick = async () => {
     await api('/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: CFG }) });
     toast('Proxy settings saved'); loadProxies();
   } catch (e) { toast(e.message); } };
+$('#irTest').onclick = async () => { const r = $('#irResult'); r.textContent = 'running the command (uses the SAVED settings — press Save settings first)…'; $('#irTest').disabled = true;
+  try { const d = await api('/api/ip-rotate/test', { method: 'POST' }); r.innerHTML = `<span class="tag ${d.ok ? 'ok' : 'err'}">${d.ok ? 'IP changed' : 'FAILED'}</span> before ${d.before || '?'} → after ${d.after || '?'} ${esc(d.error || '')}`; }
+  catch (e) { r.textContent = 'failed: ' + e.message; } finally { $('#irTest').disabled = false; } };
 $('#pCopyKey').onclick = () => { navigator.clipboard.writeText($('#pPubKey').value).then(() => toast('Public key copied')); };
 $('#pmAttach').onclick = () => { const email = $('#pmAccount').value, ip = $('#pmIp').value.trim(), user = $('#pmUser').value.trim() || 'root'; if (!email || !ip) return toast('Pick an account and enter the server IP'); provAction('/api/proxies/manual', { email, ip, user }, 'Attaching ' + ip + ' — watch the log'); };
 $('#pProvision').onclick = () => provAction('/api/proxies/provision', {}, 'Provisioning servers for all accounts without a proxy — watch the log below');
@@ -518,6 +533,8 @@ async function loadConfig() {
   $('#w_enabled').checked = w.enabled !== false; $('#w_stop_all_on_first_ack').checked = w.stop_all_on_first_ack !== false; $('#w_ack_keyword').value = w.ack_keyword || 'ok';
   $('#w_call_attempts').value = w.call_attempts ?? 3; $('#w_call_interval_seconds').value = w.call_interval_seconds ?? 120; $('#w_ring_seconds').value = w.ring_seconds ?? 25;
   WA = (w.contacts || []).map(c => ({ ...c })); renderWa();
+  const ir = CFG.ip_rotate || {};
+  $('#ir_command').value = ir.command || ''; $('#ir_timeout').value = ir.timeout_seconds ?? 90; $('#ir_require').checked = ir.require_change !== false; $('#ir_enabled').checked = !!ir.enabled;
   const pa = CFG.proxy_auto || {};
   $('#p_provider').value = pa.provider || 'digitalocean'; $('#p_region').value = pa.region || ''; $('#p_plan').value = pa.plan || ''; $('#p_enabled').checked = !!pa.enabled;
   loadProxies();

@@ -298,12 +298,20 @@ def rotate_loop(cfg: Config, once: bool) -> int:
         except ProxyError as e:
             if acct is None:
                 raise
-            # the proxy is dead or leaking — bench this account briefly, move on quickly
-            until = pool.mark_cooloff(acct, 1.0, f"proxy: {e}")
-            log.error("proxy problem for %s: %s — benched until %s", acct.name, e, until.strftime("%H:%M"))
-            log_event("error", f"Proxy problem for {acct.name}: {e}", "error", {"until": until.isoformat()})
-            _set(st, status="error", task=f"proxy problem ({acct.name}) — trying next account", accounts=pool.status())
-            delay = 60.0
+            if not acct.proxy:
+                # IP rotation (phone/VPN) problem — nothing wrong with the account; retry shortly
+                log.error("IP rotation problem: %s — retrying in 2 min", e)
+                log_event("error", f"IP rotation problem: {e}", "error")
+                notifier.error(f"IP rotation problem: {e}")
+                _set(st, status="error", task=f"IP rotation problem — {str(e)[:100]}", accounts=pool.status())
+                delay = 120.0
+            else:
+                # the proxy is dead or leaking — bench this account briefly, move on quickly
+                until = pool.mark_cooloff(acct, 1.0, f"proxy: {e}")
+                log.error("proxy problem for %s: %s — benched until %s", acct.name, e, until.strftime("%H:%M"))
+                log_event("error", f"Proxy problem for {acct.name}: {e}", "error", {"until": until.isoformat()})
+                _set(st, status="error", task=f"proxy problem ({acct.name}) — trying next account", accounts=pool.status())
+                delay = 60.0
         except CoolOff as e:
             if acct is None:
                 raise
@@ -374,11 +382,40 @@ def rotate_loop(cfg: Config, once: bool) -> int:
             return 0
 
 
+def rotate_ip(cfg: Config, last_ip: str) -> str:
+    """Run the IP-rotation command (phone tethering / VPN CLI) and return the new public IP."""
+    import subprocess
+    r = cfg.ip_rotate
+    log.info("rotating IP: %s", r.command)
+    try:
+        res = subprocess.run(r.command, shell=True, capture_output=True, text=True, timeout=r.timeout_seconds)
+    except subprocess.TimeoutExpired:
+        raise ProxyError(f"IP rotation command timed out after {r.timeout_seconds}s")
+    if res.returncode != 0:
+        raise ProxyError(f"IP rotation command failed ({res.returncode}): {(res.stderr or res.stdout).strip()[-160:]}")
+    ip = ""
+    for _ in range(12):          # the link needs a moment to come back
+        ip = _direct_ip(cfg.rotation.ip_check_url)
+        if ip:
+            break
+        time.sleep(5)
+    if not ip:
+        raise ProxyError("no internet after the IP rotation command (is the phone tethered?)")
+    if r.require_change and last_ip and ip == last_ip:
+        raise ProxyError(f"public IP did not change ({ip}) after the rotation command")
+    log.info("new public IP: %s (was %s)", ip, last_ip or "?")
+    log_event("control", f"IP rotated: {ip}" + (f" (was {last_ip})" if last_ip else ""), "info")
+    return ip
+
+
 def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Notifier, direct_ip: str) -> None:
-    """One full sweep as `acct`: open browser -> verify IP -> login (+OTP) -> check all centres -> close."""
+    """One full sweep as `acct`: (rotate IP) -> open browser -> verify IP -> login (+OTP) -> check centres -> close."""
     log.info("sweep as %s (%s)%s", acct.name, acct.email, " via proxy" if acct.proxy else "")
     _set(st, status="running", task=f"opening browser as {acct.name}", account=acct.name,
          account_email=acct.email, ip="")
+    if cfg.ip_rotate.enabled and not acct.proxy:
+        _set(st, task=f"getting a fresh IP for {acct.name}")
+        direct_ip = rotate_ip(cfg, st.get("last_ip", ""))
     with Watcher(cfg, account=acct) as w:
         w.on_otp_required = lambda: (_set(st, status="needs_human", task=f"waiting for OTP ({acct.name})"),
                                      notifier.otp_needed(str(OTP_FILE)))
@@ -389,7 +426,9 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
             ip = w.check_ip(must_differ_from=last_ip if acct.proxy else "")
             if acct.proxy and direct_ip and ip == direct_ip:
                 raise ProxyError(f"proxy leaks: public IP {ip} is the machine's own IP")
-            if not acct.proxy:
+            if not acct.proxy and cfg.ip_rotate.enabled and cfg.ip_rotate.require_change and last_ip and ip == last_ip:
+                raise ProxyError(f"public IP {ip} is the same as the last login's — rotation did not take effect")
+            if not acct.proxy and not cfg.ip_rotate.enabled:
                 log.warning("%s has no proxy — logging in from the machine's own IP %s", acct.name, ip)
             _set(st, ip=ip)
         pool.mark_used(acct, w.public_ip)
@@ -635,6 +674,19 @@ def cmd_proxies(cfg: Config, action: str, email: str, ip: str = "", user: str = 
     return 0
 
 
+def cmd_rotate_ip(cfg: Config) -> int:
+    """Test the IP rotation command once: shows the IP before and after."""
+    before = _direct_ip(cfg.rotation.ip_check_url)
+    print(f"IP before: {before or '?'}")
+    try:
+        after = rotate_ip(cfg, before)
+    except ProxyError as e:
+        print(f"FAILED: {e}")
+        return 1
+    print(f"IP after:  {after}  ({'changed' if after != before else 'SAME'})")
+    return 0 if after != before else 1
+
+
 def cmd_test_notify(cfg: Config) -> int:
     for k, v in Notifier(cfg.notify).test_all().items():
         print(f"{k:9s}: {'sent' if v else 'not configured / failed'}")
@@ -660,6 +712,7 @@ def main(argv: list[str] | None = None) -> int:
     pp.add_argument("--account", default="", help="only this account (email)")
     pp.add_argument("--ip", default="", help="attach: your own server's IP")
     pp.add_argument("--user", default="root", help="attach: SSH user on that server (ubuntu / opc / root)")
+    sub.add_parser("rotate-ip", help="run the IP rotation command once (phone tethering / VPN) and show before/after")
     ipp = sub.add_parser("ip", help="show the public IP each account gets through its proxy")
     ipp.add_argument("--account", default="", help="only this account (email)")
     ipp.add_argument("--json", action="store_true")
@@ -697,6 +750,9 @@ def main(argv: list[str] | None = None) -> int:
         return run_escalation(a.message, a.key)
     if a.cmd == "earliest":
         return cmd_earliest(cfg, a.category, a.json, a.available, a.curl)
+    if a.cmd == "rotate-ip":
+        logging.getLogger().setLevel(logging.WARNING)
+        return cmd_rotate_ip(cfg)
     if a.cmd == "proxies":
         return cmd_proxies(cfg, a.action, a.account, a.ip, a.user)
     if a.cmd == "ip":

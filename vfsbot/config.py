@@ -107,6 +107,16 @@ class ProxyAutoConfig(BaseModel):
     plan: str = ""                   # "" = cheapest default
 
 
+class IpRotateConfig(BaseModel):
+    """Get a fresh public IP before every login by running a command — the free way is an Android
+    phone on USB tethering: toggling its mobile data gives a new carrier IP (the kind of IP
+    Cloudflare trusts most). Works with any VPN CLI too (e.g. "protonvpn-cli c -r")."""
+    enabled: bool = False
+    command: str = "adb shell svc data disable && sleep 4 && adb shell svc data enable && sleep 10"
+    require_change: bool = True      # refuse to log in if the IP did not change from the last login
+    timeout_seconds: int = 90
+
+
 class Config(BaseModel):
     mode: str = "public"   # "public" = no-login earliest-date endpoint (recommended); "login" = old flow
     base_url: str = "https://visa.vfsglobal.com/ind/en/bgr"
@@ -128,6 +138,7 @@ class Config(BaseModel):
     whatsapp_web: WhatsAppWebConfig = Field(default_factory=WhatsAppWebConfig)
     rotation: RotationConfig = Field(default_factory=RotationConfig)
     proxy_auto: ProxyAutoConfig = Field(default_factory=ProxyAutoConfig)
+    ip_rotate: IpRotateConfig = Field(default_factory=IpRotateConfig)
     passport_file: str = "documents/passport_bio.jpg"
     passport_auto_continue: bool = False   # first login of an account: bot presses Continue after selecting the passport
     passport_wait_minutes: int = 10        # ...otherwise how long to wait for a human to press it
