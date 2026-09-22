@@ -253,11 +253,14 @@ def rotate_loop(cfg: Config, once: bool) -> int:
         except LoginRequired as e:
             if acct is None:
                 raise
-            what = "OTP" if isinstance(e, OtpRequired) else "login"
-            until = pool.mark_cooloff(acct, cfg.rotation.cooloff_hours / 2, f"{what} timed out")
-            log.warning("%s timed out for %s — benched until %s", what, acct.name, until.strftime("%H:%M"))
-            log_event("login", f"{what} timed out for {acct.name} — benched until {until:%H:%M}", "warn")
-            _set(st, status="error", task=f"{what} timed out ({acct.name}) — next account in {cfg.rotation.retry_minutes} min",
+            # not a Cloudflare problem — just log in again next round (no cool-off)
+            if getattr(e, "after_login", False):
+                what = "VFS session ended during the sweep"
+            else:
+                what = "OTP never arrived" if isinstance(e, OtpRequired) else "login did not complete"
+            log.warning("%s (%s) — next account in %d min", what, acct.name, cfg.rotation.retry_minutes)
+            log_event("login", f"{what} ({acct.name}) — will log in again next round", "warn")
+            _set(st, status="running", task=f"{what} ({acct.name}) — next account in {cfg.rotation.retry_minutes} min",
                  accounts=pool.status())
             delay = cfg.rotation.retry_minutes * 60.0
         except KeyboardInterrupt:
@@ -320,7 +323,11 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
         burst = "  [burst]" if in_burst_window(cfg) else ""
         _set(st, status="running", task=f"checking {n} centres as {acct.name}{burst}")
         log.info("checking %d centres as %s%s", n, acct.name, burst)
-        results = w.check_all()
+        try:
+            results = w.check_all()
+        except LoginRequired as e:
+            e.after_login = True
+            raise
         _handle_results(w, cfg, st, notifier, results)
     log.info("browser closed (%s)", acct.name)
 
@@ -495,7 +502,7 @@ def cmd_ip(cfg: Config, email: str, as_json: bool) -> int:
     for a in accts:
         rec = {"email": a.email, "name": a.name, "proxy": bool(a.proxy), "direct_ip": direct}
         try:
-            with Watcher(cfg, account=a) as w:
+            with Watcher(cfg, account=a, profile_dir=f"browser-profile/_iptest") as w:   # never touch the live profile
                 rec["ip"] = w.check_ip()
             rec["ok"] = bool(rec["ip"]) and (not a.proxy or rec["ip"] != direct)
             rec["note"] = ("no proxy — machine's own IP" if not a.proxy else

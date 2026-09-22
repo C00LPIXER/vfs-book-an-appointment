@@ -158,7 +158,7 @@ def summarize(results: list["SlotResult"]) -> str:
 
 
 class Watcher:
-    def __init__(self, cfg: Config, account: Account | None = None):
+    def __init__(self, cfg: Config, account: Account | None = None, profile_dir: str = ""):
         self.cfg = cfg
         # Each account brings its own creds, IMAP inbox, proxy and browser profile. Without an explicit
         # one (non-rotating mode / CLI helpers) take the pool's next available account.
@@ -167,13 +167,16 @@ class Watcher:
             if account is None:
                 raise RuntimeError("no VFS account available — add one on the dashboard (data/accounts.json)")
         self.account = account
-        self.profile_dir = account.profile_dir
+        self.profile_dir = profile_dir or account.profile_dir
         self.public_ip: str = ""
         self.imap_error: str = ""
+        self.logged_in = False
         self._pw = None
         self.ctx: BrowserContext | None = None
         self.page: Page | None = None
         self._last_api: dict | None = None
+        self._api_template: dict | None = None      # captured CheckIsSlotAvailable request (url/headers/body)
+        self._master_lists: dict[str, list] = {}    # captured lift-api list responses (centre list etc.)
 
     # ---- lifecycle ----------------------------------------------------------------
 
@@ -228,11 +231,33 @@ class Watcher:
 
     # ---- helpers ------------------------------------------------------------------
 
+    # request headers the browser sets itself — never replay these from a captured request
+    _BROWSER_HEADERS = {"host", "origin", "referer", "cookie", "content-length", "connection", "accept-encoding",
+                        "user-agent", "priority", "te", "upgrade-insecure-requests"}
+
     def _on_response(self, resp: Response) -> None:
-        if "CheckIsSlotAvailable" in resp.url or "/appointment/slots" in resp.url:
+        url = resp.url
+        if "CheckIsSlotAvailable" in url or "/appointment/slots" in url:
             try:
                 self._last_api = resp.json()
-                log.debug("API %s -> %s", resp.url, json.dumps(self._last_api)[:300])
+                log.debug("API %s -> %s", url, json.dumps(self._last_api)[:300])
+            except Exception:  # noqa: BLE001
+                pass
+            if "CheckIsSlotAvailable" in url and resp.status == 200:
+                # remember exactly how the SPA asks, so the other centres can be queried directly
+                try:
+                    req = resp.request
+                    hdrs = {k: v for k, v in req.headers.items()
+                            if not k.startswith(":") and not k.lower().startswith("sec-") and k.lower() not in self._BROWSER_HEADERS}
+                    self._api_template = {"url": url, "headers": hdrs, "body": json.loads(req.post_data or "{}")}
+                except Exception as e:  # noqa: BLE001
+                    log.debug("could not capture API template: %s", e)
+        elif "lift-api" in url and resp.status == 200:
+            # keep every list-shaped master response (centres, categories...) to look codes up later
+            try:
+                data = resp.json()
+                if isinstance(data, list) and data and isinstance(data[0], dict):
+                    self._master_lists[url] = data
             except Exception:  # noqa: BLE001
                 pass
 
@@ -355,8 +380,8 @@ class Watcher:
         when a proxy is configured, or the IP the previous account just used)."""
         url = self.cfg.rotation.ip_check_url
         try:
-            self.page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-            text = self.page.locator("body").inner_text(timeout=5000)
+            # ctx.request goes through the context's proxy — no tab navigation, nothing visible
+            text = self.ctx.request.get(url, timeout=30_000).text()
             m = re.search(r"(\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f:]{6,})", text)
             if not m:
                 raise ProxyError(f"unexpected reply from {url}: {text[:80]!r}")
@@ -405,6 +430,7 @@ class Watcher:
                 self._wait_for_spa()
             if self._is_logged_in() or self._on_passport_upload():
                 log.info("Logged in as %s.", self.account.name)
+                self.logged_in = True
                 log_event("login", f"Logged in ({self.account.name}" + (f", ip {self.public_ip}" if self.public_ip else "") + ")", "info")
                 self.page.wait_for_timeout(1500)
                 if self._on_passport_upload():
@@ -736,21 +762,96 @@ class Watcher:
             return SlotResult(True, "see calendar", "text", text, {}, full_centre)
         return SlotResult(False, None, "unknown", text, {}, full_centre)
 
+    _FETCH_JS = """async ({url, headers, body}) => {
+      try { const r = await fetch(url, {method: 'POST', headers, body: JSON.stringify(body)});
+            return {status: r.status, text: await r.text()}; }
+      catch (e) { return {status: 0, text: String(e)}; }
+    }"""
+
+    def _centre_codes(self, first_full_name: str) -> tuple[str, dict[str, str]] | None:
+        """From the captured master lists + request body work out (a) which body key carries the
+        centre code and (b) short centre name -> code for every centre. None if we can't be sure."""
+        if not self._api_template:
+            return None
+        body = self._api_template["body"]
+        wanted = {short_centre(c) for c in self.cfg.centre_list}
+        for data in self._master_lists.values():
+            # the centre list: some item carries the full name of the centre we just selected
+            hit = next((it for it in data if any(isinstance(v, str) and v.strip() == first_full_name.strip() for v in it.values())), None)
+            if not hit:
+                continue
+            # the code key: an item value that the request body also contains
+            code_key = next((k for k, v in hit.items() if isinstance(v, str) and v and v in body.values()), None)
+            if not code_key:
+                continue
+            body_key = next(bk for bk, bv in body.items() if bv == hit[code_key])
+            codes: dict[str, str] = {}
+            for it in data:
+                name = next((v for v in it.values() if isinstance(v, str) and short_centre(v) in wanted), "")
+                if name and isinstance(it.get(code_key), str) and it[code_key]:
+                    codes[short_centre(name)] = it[code_key]
+            if len(codes) >= 2:
+                return body_key, codes
+        return None
+
+    def _check_via_api(self, centre: str, key: str, code: str) -> SlotResult:
+        """Replay the captured CheckIsSlotAvailable request for another centre (in-page fetch, so it
+        rides the browser's cookies, JWT and proxy)."""
+        body = dict(self._api_template["body"]); body[key] = code
+        r = self.page.evaluate(self._FETCH_JS, {"url": self._api_template["url"], "headers": self._api_template["headers"], "body": body})
+        if r["status"] != 200:
+            raise RuntimeError(f"API {r['status']}: {r['text'][:100]}")
+        api = json.loads(r["text"])
+        earliest = api.get("earliestDate") or api.get("earliestSlotDate")
+        err = api.get("error")
+        if err and not isinstance(err, dict) and "no slot" not in str(err).lower():
+            raise RuntimeError(f"API error: {str(err)[:100]}")
+        return SlotResult(bool(earliest) and not err, _fmt_date(earliest) if earliest else None, "api", "", api, centre)
+
     def check_all(self) -> list[SlotResult]:
-        """Check every configured centre, in config order (nearest first)."""
+        """Check every configured centre, in config order (nearest first). The first centre is done
+        through the real form (that also reveals the API request); the rest are asked directly over
+        the API in a few seconds — the post-login session only lives a few minutes, far less than
+        driving 15 forms takes. Any centre the API can't answer falls back to the form."""
         results: list[SlotResult] = []
-        for centre in self.cfg.centre_list:
-            try:
-                r = self.check(centre)
-            except LoginRequired:
-                raise
-            except Exception as e:  # noqa: BLE001
-                log.warning("check %s failed: %s", centre, str(e).splitlines()[0])
-                r = SlotResult(False, None, "error", "", {}, centre, error=str(e).splitlines()[0][:80])
-                if self._on_login_page():
-                    raise LoginRequired(self.url)
+        centres = list(self.cfg.centre_list)
+        api_key, codes = "", {}
+        for i, centre in enumerate(centres):
+            r = None
+            if api_key and short_centre(centre) in codes:
+                try:
+                    r = self._check_via_api(centre, api_key, codes[short_centre(centre)])
+                    r.centre = centre
+                except Exception as e:  # noqa: BLE001
+                    log.warning("API check %s failed (%s) — using the form", centre, str(e).splitlines()[0][:80])
+                    r = None
+            if r is None:
+                try:
+                    r = self.check(centre)
+                except LoginRequired:
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    log.warning("check %s failed: %s", centre, str(e).splitlines()[0])
+                    r = SlotResult(False, None, "error", "", {}, centre, error=str(e).splitlines()[0][:80])
+                    if self._on_login_page():
+                        raise LoginRequired(self.url)
+                if i == 0 and not api_key:
+                    found = self._centre_codes(r.centre)
+                    if found:
+                        api_key, codes = found
+                        log.info("API mode: centre key '%s', %d centre codes known — remaining centres via API", api_key, len(codes))
+                        try:
+                            redacted = {**self._api_template, "headers": {k: ("<redacted>" if k.lower() in ("authorize", "authorization") else v)
+                                                                            for k, v in self._api_template["headers"].items()}}
+                            Path("state/api_capture.json").write_text(json.dumps({"template": redacted, "key": api_key, "codes": codes}, indent=2))
+                        except Exception:  # noqa: BLE001
+                            pass
+                    else:
+                        log.warning("API request not captured — checking all centres through the form (slow)")
+                pause = self.cfg.centre_pause_seconds
+                self.page.wait_for_timeout(int(random.uniform(pause * 0.7, pause * 1.3) * 1000))
+            else:
+                self.page.wait_for_timeout(random.randint(400, 900))
             results.append(r)
             log.info("  %s", r.summary())
-            pause = self.cfg.centre_pause_seconds
-            self.page.wait_for_timeout(int(random.uniform(pause * 0.7, pause * 1.3) * 1000))
         return results
