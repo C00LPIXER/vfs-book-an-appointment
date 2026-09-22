@@ -139,6 +139,7 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
       <div class="mono" id="lTask" style="color:var(--muted);margin:4px 0 2px"></div>
       <div class="mono" id="lAccount" style="color:var(--muted)"></div>
       <div class="mono" id="lUpdated" style="color:var(--dim)"></div>
+      <div id="lLive" style="margin-top:10px"></div>
       <div id="lAccounts" style="margin-top:8px"></div>
       <div class="row" style="margin-top:10px">
         <button class="btn primary" id="lStart">Start</button>
@@ -371,6 +372,14 @@ async function loadStatus() {
     $('#lUpdated').textContent = lst.last_check_at ? 'last check ' + fmt(lst.last_check_at) : '';
     $('#lAccount').textContent = L.running && lst.account ? `account: ${lst.account}` + (lst.ip ? `  ·  ip ${lst.ip}` : '') : '';
     $('#otpWho').textContent = lst.account || 'the account';
+    const ago = (iso) => { if (!iso) return ''; const d = (Date.now() - new Date(iso).getTime()) / 1000; return d < 60 ? `${Math.round(d)}s ago` : d < 3600 ? `${Math.round(d / 60)} min ago` : `${(d / 3600).toFixed(1)} h ago`; };
+    const liveRows = lst.centre_live || [];
+    const stateTag = (r) => r.state === 'checking' ? '<span class="tag" style="background:rgba(255,160,0,.15);color:#ffb347">checking…</span>'
+      : r.state === 'queued' ? '<span class="tag none">queued</span>' : r.state === 'slot' ? '<span class="tag ok">SLOT</span>'
+      : r.state === 'none' ? '<span class="tag none">no slot</span>' : r.state === 'error' ? '<span class="tag err">error</span>' : '<span class="tag none">not checked yet</span>';
+    $('#lLive').innerHTML = liveRows.length ? `<div class="mono" style="color:var(--muted);margin-bottom:4px">Live — ${L.running ? (lst.task || '') : 'not running'}${lst.updated_at ? ' · updated ' + ago(lst.updated_at) : ''}</div>
+      <table><thead><tr><th>Centre</th><th>Status</th><th>Earliest</th><th>Last checked</th><th>By</th><th></th></tr></thead><tbody>` +
+      liveRows.map(r => `<tr${r.state === 'checking' ? ' style="background:rgba(255,160,0,.06)"' : ''}><td>${esc(r.centre)}</td><td>${stateTag(r)}</td><td class="mono">${r.earliest || '—'}</td><td class="mono">${r.checked_at ? fmt(r.checked_at) + ' (' + ago(r.checked_at) + ')' : '—'}</td><td>${esc(r.by || '')}</td><td class="mono" style="color:var(--dim)">${esc(r.error || '')}</td></tr>`).join('') + '</tbody></table>' : '';
     const accs = s.accounts || lst.accounts || [];
     $('#lAccounts').innerHTML = accs.length ? `<table><thead><tr><th>Account</th><th>Last login</th><th>IP</th><th>Status</th></tr></thead><tbody>` +
       accs.map(a => `<tr><td>${a.name}${a.has_proxy ? '' : ' <span class="tag none" title="no proxy">no proxy</span>'}</td><td class="mono">${a.last_login_at ? fmt(a.last_login_at) : '—'}</td><td class="mono">${a.last_ip || '—'}</td><td>${a.imap_error ? '<span class="tag err" title="' + esc(a.imap_error) + '">OTP inbox failing</span> ' : ''}${!a.enabled ? '<span class="tag none">off</span>' : a.cooldown_until ? `<span class="tag err" title="${(a.last_error||'').replace(/"/g,'&quot;')}">cool-off until ${fmt(a.cooldown_until)}</span>` : '<span class="tag ok">ready</span>'}</td></tr>`).join('') + '</tbody></table>' : '';
@@ -584,7 +593,7 @@ async function loadShots() {
   $('#shotGrid').innerHTML = s.map(x => `<a href="/screenshots/${x.name}" target="_blank"><img src="/screenshots/${x.name}" loading="lazy"><span>${x.name.replace('.png', '')}</span></a>`).join('') || '<span style="color:var(--muted)">No screenshots yet.</span>';
 }
 
-loadStatus(); setInterval(loadStatus, 5000);
+loadStatus(); setInterval(loadStatus, 3000);
 </script>
 </body>
 </html>

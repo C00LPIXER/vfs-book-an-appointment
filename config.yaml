@@ -61,7 +61,7 @@ burst:
   timezone: Asia/Kolkata
 notify:
   cooldown_minutes: 30
-  heartbeat_hours: 6
+  heartbeat_hours: 0
   alert_top_n: 0
   quiet_hours_from: ''
   quiet_hours_to: ''
@@ -108,3 +108,5 @@ passport_file: documents/passport_bio.jpg
 passport_auto_continue: false
 passport_wait_minutes: 10
 team: 4indegree · AAI (Anas and Amal Intelligence)
+ip_rotate:
+  enabled: false

@@ -408,6 +408,15 @@ def rotate_ip(cfg: Config, last_ip: str) -> str:
     return ip
 
 
+def _live_rows(cfg: Config, live: dict) -> list[dict]:
+    """Per-centre live status in priority order, for the dashboard."""
+    rows = []
+    for c in cfg.centre_list:
+        sc = short_centre(c)
+        rows.append({"centre": sc, **live.get(sc, {"state": "pending", "earliest": None, "checked_at": None, "by": None, "error": ""})})
+    return rows
+
+
 def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Notifier, direct_ip: str) -> None:
     """One full sweep as `acct`: (rotate IP) -> open browser -> verify IP -> login (+OTP) -> check centres -> close."""
     log.info("sweep as %s (%s)%s", acct.name, acct.email, " via proxy" if acct.proxy else "")
@@ -445,11 +454,37 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
         burst = "  [burst]" if in_burst_window(cfg) else ""
         _set(st, status="running", task=f"checking {', '.join(short_centre(c) for c in batch)} as {acct.name}{burst}")
         log.info("checking %d of %d centres as %s (%s)%s", per, len(all_centres), acct.name, ", ".join(short_centre(c) for c in batch), burst)
+
+        live = {r["centre"]: r for r in st.get("centre_live", []) if r.get("state") not in ("checking",)}
+        for c in batch:
+            live[short_centre(c)] = {**live.get(short_centre(c), {}), "state": "queued", "error": ""}
+
+        def progress(centre, state, r, i, n):
+            sc = short_centre(centre)
+            now = datetime.now().isoformat(timespec="seconds")
+            if state == "checking":
+                live[sc] = {**live.get(sc, {}), "state": "checking", "by": acct.name, "error": ""}
+                _set(st, task=f"checking {sc} ({i + 1}/{n}) as {acct.name}{burst}", centre_live=_live_rows(cfg, live))
+            elif state == "done":
+                live[sc] = {"state": ("error" if r.error else ("slot" if r.available else "none")), "earliest": r.earliest,
+                            "checked_at": now, "by": acct.name, "error": r.error}
+                _set(st, centre_live=_live_rows(cfg, live))
+            else:   # skipped (quota) — keep the previous result, note why
+                live[sc] = {**live.get(sc, {}), "state": live.get(sc, {}).get("state") if live.get(sc, {}).get("checked_at") else "pending",
+                            "error": "quota spent — next login"}
+                _set(st, centre_live=_live_rows(cfg, live))
+
         try:
-            results = w.check_all(batch)
+            results = w.check_all(batch, on_progress=progress)
         except LoginRequired as e:
             e.after_login = True
             done = [r for r in w.partial_results if r.source not in ("skipped", "error")]
+            for c in batch[len(w.partial_results):]:
+                live[short_centre(c)] = {**live.get(short_centre(c), {}), "state": live.get(short_centre(c), {}).get("state") if live.get(short_centre(c), {}).get("checked_at") else "pending", "error": "session ended — next login"}
+            for sc, v in live.items():
+                if v.get("state") == "checking":
+                    v["state"] = "pending"; v["error"] = "session ended — next login"
+            _set(st, centre_live=_live_rows(cfg, live))
             log_event("login", f"VFS session ended during the sweep ({acct.name}) after {len(done)} centre(s) at {w.url}", "warn",
                       screenshot=w.screenshot("session_ended"))
             if done:   # keep what was checked; the next login continues from the next centre

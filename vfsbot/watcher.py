@@ -859,7 +859,7 @@ class Watcher:
             raise RuntimeError(f"API error: {str(err)[:100]}")
         return SlotResult(bool(earliest) and not err, _fmt_date(earliest) if earliest else None, "api", "", api, centre)
 
-    def check_all(self, centres: list[str] | None = None) -> list[SlotResult]:
+    def check_all(self, centres: list[str] | None = None, on_progress=None) -> list[SlotResult]:
         """Check the given centres (default: all configured) through the booking form, in order.
         VFS rate-limits CheckIsSlotAvailable to ~7 calls per login (HTTP 429, then it logs the session
         out), so callers pass a slice of the priority list and we stop at the first 429 — the centres
@@ -872,7 +872,12 @@ class Watcher:
             if self.rate_limited:
                 log.warning("VFS rate limit hit — %d centre(s) left for the next login: %s", len(centres) - i, ", ".join(short_centre(c) for c in centres[i:]))
                 results += [SlotResult(False, None, "skipped", "", {}, c, error="not checked: VFS rate limit — next login") for c in centres[i:]]
+                if on_progress:
+                    for c in centres[i:]:
+                        on_progress(c, "skipped", None, i, len(centres))
                 break
+            if on_progress:
+                on_progress(centre, "checking", None, i, len(centres))
             r = None
             if self.cfg.api_replay and api_key and short_centre(centre) in codes:
                 try:
@@ -910,4 +915,6 @@ class Watcher:
                 self.page.wait_for_timeout(random.randint(400, 900))
             results.append(r)
             log.info("  %s", r.summary())
+            if on_progress:
+                on_progress(centre, "done", r, i, len(centres))
         return results
