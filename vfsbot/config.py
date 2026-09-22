@@ -125,6 +125,8 @@ class Config(BaseModel):
     rotation: RotationConfig = Field(default_factory=RotationConfig)
     proxy_auto: ProxyAutoConfig = Field(default_factory=ProxyAutoConfig)
     passport_file: str = "documents/passport_bio.jpg"
+    passport_auto_continue: bool = False   # first login of an account: bot presses Continue after selecting the passport
+    passport_wait_minutes: int = 10        # ...otherwise how long to wait for a human to press it
     team: str = "4indegree · AAI (Anas and Amal Intelligence)"
 
     @property

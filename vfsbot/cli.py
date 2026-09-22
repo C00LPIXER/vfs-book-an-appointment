@@ -13,7 +13,7 @@ from .events import log_event
 from .notify import Notifier
 from .schedule import in_burst_window, in_run_window, next_delay
 from .accounts import AccountPool
-from .watcher import OTP_FILE, Blocked, CoolOff, LoginRequired, OtpRequired, ProxyError, Watcher, short_centre, summarize
+from .watcher import OTP_FILE, Blocked, CoolOff, LoginRequired, OtpRequired, PassportPending, ProxyError, Watcher, short_centre, summarize
 
 log = logging.getLogger("vfsbot")
 
@@ -243,6 +243,11 @@ def rotate_loop(cfg: Config, once: bool) -> int:
             if consecutive_errors in (1, 5):
                 notifier.error(f"blocked by Cloudflare/WAF as {acct.name} ({e}); rotating")
             _set(st, status="blocked", task=f"{acct.name} blocked — next account in {cfg.rotation.retry_minutes} min",
+                 accounts=pool.status())
+            delay = cfg.rotation.retry_minutes * 60.0
+        except PassportPending:
+            # logged in fine; VFS's one-time passport step needs a human (no cool-off — nothing went wrong)
+            _set(st, status="needs_human", task=f"{acct.name}: passport step needs Continue in the browser (or enable auto-continue in Settings)",
                  accounts=pool.status())
             delay = cfg.rotation.retry_minutes * 60.0
         except LoginRequired as e:

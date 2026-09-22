@@ -137,7 +137,10 @@ Session facts:
 - The **x-auth-token is static** (same value across sessions) — shipped in the SPA.
 - **OTP is required on every login** (email / SMS / WhatsApp). IMAP auto-OTP removes the manual step.
 - First login of an account requests the **passport bio page** (≤ 2 MB); the bot selects the file
-  and a human presses Continue (VFS locks the extracted data).
+  and either presses Continue itself (`passport_auto_continue`) or waits `passport_wait_minutes` for
+  a human to (VFS locks the extracted data). Not a cool-off: the account is retried next round.
+- OTP: the inbox is polled every 10 s; humans are only asked if no App Password is set, the inbox
+  rejects the login, or no OTP mail has arrived after 60 s.
 
 ---
 

@@ -14,6 +14,7 @@ import logging
 import random
 import re
 import shutil
+import time
 from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,6 +46,10 @@ class LoginRequired(Exception):
 
 class OtpRequired(LoginRequired):
     pass
+
+
+class PassportPending(LoginRequired):
+    """Logged in, but VFS's one-time passport-upload step is waiting for a human to press Continue."""
 
 
 OTP_FILE = Path("state/otp.txt")
@@ -392,6 +397,7 @@ class Watcher:
         clicked = False
         otp_announced = False
         imap_broken = False
+        otp_waited = 0
         while waited < deadline:
             if self.page.is_closed():
                 self._ensure_page()
@@ -402,14 +408,23 @@ class Watcher:
                 log_event("login", f"Logged in ({self.account.name}" + (f", ip {self.public_ip}" if self.public_ip else "") + ")", "info")
                 self.page.wait_for_timeout(1500)
                 if self._on_passport_upload():
-                    self._upload_passport()
+                    self._upload_passport()      # raises PassportPending if a human still has to press Continue
                 return
             if self._on_otp_step():
                 if not otp_announced:
-                    log.warning("OTP required — type it in the browser window, or write it to %s", OTP_FILE)
-                    log_event("otp", f"OTP requested by VFS for {self.account.name} (sent to the account's email/SMS/WhatsApp)", "warn")
+                    log.warning("OTP required — reading it from %s's inbox%s", self.account.name,
+                                "" if self.account.imap_password else " is NOT configured; type it in the dashboard or write it to " + str(OTP_FILE))
+                    log_event("otp", f"OTP requested by VFS for {self.account.name}" +
+                              (" — reading it from the inbox" if self.account.imap_password else " — no App Password: type it in the dashboard"), "warn")
                     otp_announced = True
                     otp_asked_at = datetime.now().astimezone()
+                    otp_waited = 0
+                    if not self.account.imap_password:
+                        self.on_otp_required()      # nobody can fetch it for us: tell the humans right away
+                otp_waited += step
+                if otp_waited == 60_000 and self.account.imap_password and not imap_broken:
+                    # a minute without the mail arriving: ask a human as a fallback (auto-fetch keeps trying)
+                    log_event("otp", f"No OTP mail for {self.account.name} after 60 s — asking a human as fallback", "warn")
                     self.on_otp_required()
                 if not self._try_submit_otp() and waited % 10_000 == 0 and self.account.imap_password and not imap_broken:
                     try:
@@ -479,20 +494,52 @@ class Watcher:
         return True
 
     def _upload_passport(self) -> None:
-        """One-time account step after first login: VFS wants the passport bio page.
-        We select the file and stop — a human presses Continue (VFS locks the extracted data)."""
+        """One-time account step after the first login: VFS wants the passport bio page. We select
+        the file; then either press Continue ourselves (cfg.passport_auto_continue — VFS locks the
+        data it extracts, so make sure the image is the right passport) or wait for a human to."""
         f = Path(self.account.passport_file or self.cfg.passport_file)
         if not f.exists():
-            log_event("upload", f"VFS asks for the passport bio page but {f} is missing", "error",
+            log_event("upload", f"VFS asks for {self.account.name}'s passport bio page but {f} is missing", "error",
                       screenshot=self.screenshot("passport_missing"))
-            return
+            self.on_human_needed(f"VFS wants the passport bio page for {self.account.name} but {f} is missing — upload it on the Settings tab")
+            raise PassportPending(self.url)
         try:
             self.page.locator("input[type=file]").first.set_input_files(str(f))
-            log_event("upload", f"Passport file selected ({f.name}) — press Continue in the browser window", "warn",
-                      screenshot=self.screenshot("passport_selected"))
-            self.on_human_needed("Passport upload: press Continue in the bot's browser window")
+            self.page.wait_for_timeout(2500)
         except Exception as e:  # noqa: BLE001
             log_event("upload", f"Passport upload failed: {e}", "error", screenshot=self.screenshot("passport_error"))
+            raise PassportPending(self.url)
+        if self.cfg.passport_auto_continue:
+            log_event("upload", f"Passport selected for {self.account.name} ({f.name}) — pressing Continue", "warn",
+                      screenshot=self.screenshot("passport_selected"))
+            btn = self.page.get_by_role("button", name=re.compile(r"continue|submit|next|proceed", re.I)).first
+            try:
+                btn.wait_for(state="visible", timeout=15_000)
+                for _ in range(20):          # button enables once VFS has read the image
+                    if btn.is_enabled():
+                        break
+                    self.page.wait_for_timeout(1000)
+                btn.click()
+            except Exception as e:  # noqa: BLE001
+                log_event("upload", f"Could not press Continue: {str(e).splitlines()[0][:120]}", "error", screenshot=self.screenshot("passport_error"))
+                self.on_human_needed(f"Passport step for {self.account.name}: press Continue in the bot's browser window")
+        else:
+            log_event("upload", f"Passport selected for {self.account.name} ({f.name}) — a human must press Continue in the browser window "
+                      f"(waiting up to {self.cfg.passport_wait_minutes} min; or enable 'press Continue automatically' in Settings)", "warn",
+                      screenshot=self.screenshot("passport_selected"))
+            self.on_human_needed(f"First login of {self.account.name}: passport selected — press Continue in the bot's browser window")
+        # wait for the step to be over (dashboard visible)
+        deadline = time.monotonic() + self.cfg.passport_wait_minutes * 60
+        while time.monotonic() < deadline:
+            if self._is_logged_in() or "/dashboard" in self.url or not self._on_passport_upload():
+                self.page.wait_for_timeout(1500)
+                if not self._on_passport_upload():
+                    log_event("upload", f"Passport step done for {self.account.name}", "info")
+                    return
+            self.page.wait_for_timeout(3000)
+        log_event("upload", f"Passport step for {self.account.name} still waiting for Continue — giving up this sweep", "warn",
+                  screenshot=self.screenshot("passport_timeout"))
+        raise PassportPending(self.url)
 
     def on_human_needed(self, what: str) -> None:
         """Hook: the CLI replaces this to send a Telegram nudge."""
