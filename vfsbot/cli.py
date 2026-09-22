@@ -13,7 +13,7 @@ from .events import log_event
 from .notify import Notifier
 from .schedule import in_burst_window, in_run_window, next_delay
 from .accounts import AccountPool
-from .watcher import OTP_FILE, Blocked, CoolOff, LoginRequired, OtpRequired, PassportPending, ProxyError, Watcher, short_centre, summarize
+from .watcher import OTP_FILE, Blocked, CoolOff, LoginRequired, OtpRequired, PassportPending, ProxyError, SlotResult, Watcher, short_centre, summarize
 
 log = logging.getLogger("vfsbot")
 
@@ -134,6 +134,84 @@ def _direct_ip(url: str) -> str:
             return m.group(1) if m else ""
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _handle_results(w, cfg: Config, st: dict, notifier: Notifier, results: list, all_centres: list | None = None) -> None:
+    """Log the sweep, update the state file / matrix, alert + escalate on availability, heartbeat.
+    When only a slice of the centres was checked (login mode), centres not in this batch keep the
+    value from the previous sweep so the dashboard always shows all of them."""
+    url = f"{cfg.base_url}/dashboard"
+    if all_centres:
+        prev = {r["centre"]: r for r in st.get("last_results", [])}
+        checked = {short_centre(r.centre): r for r in results if r.source != "skipped"}
+        merged = []
+        for c in all_centres:
+            sc = short_centre(c)
+            if sc in checked:
+                merged.append(checked[sc])
+            elif sc in prev:
+                p_ = prev[sc]
+                merged.append(SlotResult(bool(p_.get("available")), p_.get("earliest"), "previous", "", {}, c, error=p_.get("error", "")))
+            else:
+                merged.append(SlotResult(False, None, "skipped", "", {}, c, error="not checked yet"))
+        results = merged
+    report = summarize(results)
+    top_n = cfg.notify.alert_top_n or len(results)
+    avail = [r for r in results[:top_n] if r.available]
+    log.info("result:\n%s", report)
+    lu = getattr(w, "last_updated", "")
+    n_checked = len([r for r in results if r.source not in ("previous", "skipped")])
+    log_event("check", f"Sweep done: {len(avail)} centre(s) with slots" + (f" ({n_checked} checked now)" if all_centres else "")
+              + (f" (VFS updated {lu})" if lu else ""), "alert" if avail else "info",
+              {"results": [{"centre": short_centre(r.centre), "available": r.available,
+                            "earliest": r.earliest, "source": r.source, "error": r.error} for r in results]})
+    raw = getattr(w, "last_raw", {}) or {}
+    if raw:
+        categories, matrix = _matrix_from_raw(raw, cfg.centre_list)
+    else:
+        # login watcher: one column for the watched category, from the per-centre results
+        categories = [cfg.category or "D visa"]
+        matrix = [{"centre": short_centre(r.centre),
+                   "cells": {categories[0]: (r.earliest or "")}} for r in results]
+    _set(st, last_check_at=datetime.now().isoformat(timespec="seconds"), last_result=report,
+         vfs_updated=getattr(w, "last_updated", ""), mode=cfg.mode,
+         vfs_updated_value=raw.get("lastUpdatedValue"), vfs_updated_type=raw.get("lastUpdatedType"),
+         vfs_fetched_at=datetime.now().isoformat(timespec="seconds"),
+         earliest_categories=categories, earliest_matrix=matrix,
+         last_results=[{"centre": short_centre(r.centre), "available": r.available, "earliest": r.earliest,
+                        "error": r.error, "source": r.source,
+                        "checked_at": (datetime.now().isoformat(timespec="seconds") if r.source not in ("previous", "skipped")
+                                       else next((p.get("checked_at") for p in st.get("last_results", []) if p["centre"] == short_centre(r.centre)), None))}
+                       for r in results])
+
+    if avail:
+        key = [[short_centre(r.centre), r.earliest] for r in avail]
+        if _should_alert(st, key, cfg.notify.cooldown_minutes):
+            nearest = avail[0]
+            headline = f"Nearest: {short_centre(nearest.centre)} — {nearest.earliest}"
+            msg = ("\U0001F389 VFS SLOT OPEN\n"
+                   f"Centre: {short_centre(nearest.centre)}\n"
+                   f"Earliest: {nearest.earliest}\n"
+                   f"Category: {cfg.category}"
+                   + (f" / {cfg.subcategory}" if cfg.subcategory else "") + "\n"
+                   f"Checked: {datetime.now().strftime('%d-%m %H:%M')}\n\n"
+                   f"{report}\n\nBook now: {url}\nReply {cfg.whatsapp_web.ack_keyword.upper()} to stop the calls.")
+            sent = notifier.slot_found(msg, short_centre(nearest.centre) + " " + str(nearest.earliest))
+            log_event("alert", f"SLOT ALERT via {', '.join(sent) or 'NO CHANNEL — add WhatsApp contacts!'}: {headline}", "alert",
+                      {"channels": sent, "available": key}, w.screenshot("slot_found"))
+            _set(st, last_alert_at=datetime.now().isoformat(timespec="seconds"), last_alert_key=key,
+                 last_alert_channels=sent)
+        else:
+            log.info("same availability as last alert, within cooldown — not re-alerting")
+    else:
+        st.pop("last_alert_key", None)
+
+    hb = cfg.notify.heartbeat_hours
+    if hb and not avail:
+        last_hb = st.get("last_heartbeat_at")
+        if not last_hb or datetime.fromisoformat(last_hb) + timedelta(hours=hb) < datetime.now():
+            notifier.heartbeat(f"still watching, nothing yet.\n{report}")
+            _set(st, last_heartbeat_at=datetime.now().isoformat(timespec="seconds"))
 
 
 def cmd_whatsapp_setup(cfg: Config) -> int:
@@ -319,16 +397,21 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
         finally:
             pool.mark_imap(acct, w.imap_error)
         pool.mark_login_ok(acct)
-        n = len(cfg.centre_list)
+        all_centres = list(cfg.centre_list)
+        per = max(1, min(cfg.login_centres_per_session, len(all_centres)))
+        start = int(st.get("centre_cursor", 0)) % len(all_centres)
+        batch = (all_centres * 2)[start:start + per]          # wrap around the priority list
         burst = "  [burst]" if in_burst_window(cfg) else ""
-        _set(st, status="running", task=f"checking {n} centres as {acct.name}{burst}")
-        log.info("checking %d centres as %s%s", n, acct.name, burst)
+        _set(st, status="running", task=f"checking {', '.join(short_centre(c) for c in batch)} as {acct.name}{burst}")
+        log.info("checking %d of %d centres as %s (%s)%s", per, len(all_centres), acct.name, ", ".join(short_centre(c) for c in batch), burst)
         try:
-            results = w.check_all()
+            results = w.check_all(batch)
         except LoginRequired as e:
             e.after_login = True
             raise
-        _handle_results(w, cfg, st, notifier, results)
+        checked = [r for r in results if r.source != "skipped"]
+        _set(st, centre_cursor=(start + len(checked)) % len(all_centres))
+        _handle_results(w, cfg, st, notifier, results, all_centres)
     log.info("browser closed (%s)", acct.name)
 
 

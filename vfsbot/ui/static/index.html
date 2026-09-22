@@ -236,6 +236,7 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
       <ul class="centres" id="centreList"></ul>
       <div class="row"><div style="flex:1"><label>Pause between centres (s)</label><input type="number" id="c_centre_pause_seconds" min="2" max="60"></div>
         <div style="flex:1"><label>Only alert for first N centres (0 = all)</label><input type="number" id="n_alert_top_n" min="0" max="15"></div></div>
+      <label>Centres per login (VFS allows ~7 slot checks per session, then logs out) — each login continues round the list</label><input type="number" id="c_login_centres_per_session" min="1" max="15">
     </div>
 
     <div class="card"><h3>Schedule</h3>
@@ -508,7 +509,7 @@ async function loadConfig() {
   $('#c_category').innerHTML = Object.keys(CATS).map(c => `<option ${c === CFG.category ? 'selected' : ''}>${c}</option>`).join(''); renderSubcats();
   $('#c_category').onchange = renderSubcats;
   renderCentres();
-  $('#c_centre_pause_seconds').value = CFG.centre_pause_seconds; $('#c_interval_seconds').value = String(CFG.interval_seconds);
+  $('#c_centre_pause_seconds').value = CFG.centre_pause_seconds; $('#c_login_centres_per_session').value = CFG.login_centres_per_session ?? 6; $('#c_interval_seconds').value = String(CFG.interval_seconds);
   $('#sc_date_from').value = CFG.schedule.date_from; $('#sc_date_to').value = CFG.schedule.date_to; $('#sc_hours_from').value = CFG.schedule.hours_from; $('#sc_hours_to').value = CFG.schedule.hours_to;
   $('#sc_days').innerHTML = DAYS.map((d, i) => `<label class="check" style="margin:0 8px 0 0"><input type="checkbox" class="day" data-d="${i}" ${CFG.schedule.days.includes(i) ? 'checked' : ''}>${d}</label>`).join('');
   $('#b_enabled').checked = CFG.burst.enabled; $('#b_start').value = CFG.burst.start; $('#b_end').value = CFG.burst.end; $('#b_interval_seconds').value = CFG.burst.interval_seconds;
@@ -530,7 +531,7 @@ async function loadConfig() {
 $('#saveBtn').onclick = async () => {
   try {
     CFG.category = $('#c_category').value; CFG.subcategory = $('#c_subcategory').value;
-    CFG.centre_pause_seconds = +$('#c_centre_pause_seconds').value; CFG.interval_seconds = +$('#c_interval_seconds').value;
+    CFG.centre_pause_seconds = +$('#c_centre_pause_seconds').value; CFG.login_centres_per_session = +$('#c_login_centres_per_session').value || 6; CFG.interval_seconds = +$('#c_interval_seconds').value;
     CFG.schedule = { ...CFG.schedule, date_from: $('#sc_date_from').value, date_to: $('#sc_date_to').value, hours_from: $('#sc_hours_from').value || '00:00', hours_to: $('#sc_hours_to').value || '23:59', days: [...document.querySelectorAll('.day:checked')].map(x => +x.dataset.d) };
     CFG.burst = { ...CFG.burst, enabled: $('#b_enabled').checked, start: $('#b_start').value, end: $('#b_end').value, interval_seconds: +$('#b_interval_seconds').value };
     for (const k of ['cooldown_minutes', 'heartbeat_hours', 'alert_top_n']) CFG.notify[k] = +$('#n_' + k).value;

@@ -171,6 +171,7 @@ class Watcher:
         self.public_ip: str = ""
         self.imap_error: str = ""
         self.logged_in = False
+        self.rate_limited = False
         self._pw = None
         self.ctx: BrowserContext | None = None
         self.page: Page | None = None
@@ -237,6 +238,8 @@ class Watcher:
 
     def _on_response(self, resp: Response) -> None:
         url = resp.url
+        if "CheckIsSlotAvailable" in url and resp.status == 429:
+            self.rate_limited = True      # VFS's per-session quota is spent: stop asking, or it logs us out
         if "CheckIsSlotAvailable" in url or "/appointment/slots" in url:
             try:
                 self._last_api = resp.json()
@@ -780,10 +783,13 @@ class Watcher:
             hit = next((it for it in data if any(isinstance(v, str) and v.strip() == first_full_name.strip() for v in it.values())), None)
             if not hit:
                 continue
-            # the code key: an item value that the request body also contains
-            code_key = next((k for k, v in hit.items() if isinstance(v, str) and v and v in body.values()), None)
-            if not code_key:
+            # the code key: an item value that the request body also contains AND that differs per
+            # centre (missionCode/countryCode are in the body too but are the same for every centre)
+            cands = [k for k, v in hit.items() if isinstance(v, str) and v and v in body.values()]
+            cands = [k for k in cands if len({it.get(k) for it in data}) > 1]
+            if not cands:
                 continue
+            code_key = max(cands, key=lambda k: len({it.get(k) for it in data}))
             body_key = next(bk for bk, bv in body.items() if bv == hit[code_key])
             codes: dict[str, str] = {}
             for it in data:
@@ -808,17 +814,21 @@ class Watcher:
             raise RuntimeError(f"API error: {str(err)[:100]}")
         return SlotResult(bool(earliest) and not err, _fmt_date(earliest) if earliest else None, "api", "", api, centre)
 
-    def check_all(self) -> list[SlotResult]:
-        """Check every configured centre, in config order (nearest first). The first centre is done
-        through the real form (that also reveals the API request); the rest are asked directly over
-        the API in a few seconds — the post-login session only lives a few minutes, far less than
-        driving 15 forms takes. Any centre the API can't answer falls back to the form."""
+    def check_all(self, centres: list[str] | None = None) -> list[SlotResult]:
+        """Check the given centres (default: all configured) through the booking form, in order.
+        VFS rate-limits CheckIsSlotAvailable to ~7 calls per login (HTTP 429, then it logs the session
+        out), so callers pass a slice of the priority list and we stop at the first 429 — the centres
+        left over are reported as 'not checked' and picked up by the next login."""
         results: list[SlotResult] = []
-        centres = list(self.cfg.centre_list)
+        centres = list(centres if centres is not None else self.cfg.centre_list)
         api_key, codes = "", {}
         for i, centre in enumerate(centres):
+            if self.rate_limited:
+                log.warning("VFS rate limit hit — %d centre(s) left for the next login: %s", len(centres) - i, ", ".join(short_centre(c) for c in centres[i:]))
+                results += [SlotResult(False, None, "skipped", "", {}, c, error="not checked: VFS rate limit — next login") for c in centres[i:]]
+                break
             r = None
-            if api_key and short_centre(centre) in codes:
+            if self.cfg.api_replay and api_key and short_centre(centre) in codes:
                 try:
                     r = self._check_via_api(centre, api_key, codes[short_centre(centre)])
                     r.centre = centre
@@ -835,7 +845,7 @@ class Watcher:
                     r = SlotResult(False, None, "error", "", {}, centre, error=str(e).splitlines()[0][:80])
                     if self._on_login_page():
                         raise LoginRequired(self.url)
-                if i == 0 and not api_key:
+                if self.cfg.api_replay and i == 0 and not api_key:
                     found = self._centre_codes(r.centre)
                     if found:
                         api_key, codes = found
