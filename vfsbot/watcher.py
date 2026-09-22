@@ -22,6 +22,7 @@ from typing import Optional
 
 from playwright.sync_api import BrowserContext, Page, Response, TimeoutError as PWTimeout, sync_playwright
 
+from . import human
 from .accounts import Account, AccountPool
 from .config import Config
 from .events import log_event
@@ -341,10 +342,11 @@ class Watcher:
         box = self.page.locator(self.OTP_FORM).first
         if not box.count():
             box = self.page.locator("input:not([type=hidden])").last
-        box.fill(code)
+        human.type_into(self.page, box, code)
         log.info("OTP entered from %s", OTP_FILE)
+        human.nap(self.page, 400, 1500)
         try:
-            self._submit_button().click(timeout=5000)
+            human.click(self.page, self._submit_button(), timeout=5000)
         except Exception:  # noqa: BLE001
             box.press("Enter")
         return True
@@ -420,6 +422,7 @@ class Watcher:
             self.page.reload(wait_until="domcontentloaded")
             self._wait_for_spa()
         self._dismiss_cookie_banner()
+        human.dwell(self.page)
         if not self._on_login_page():
             return
 
@@ -491,7 +494,8 @@ class Watcher:
                         token = self.page.input_value("input[name='cf-turnstile-response']", timeout=500)
                         btn = self._submit_button()
                         if token and btn.count() and btn.is_enabled():
-                            btn.click()
+                            human.nap(self.page, 500, 2200)
+                            human.click(self.page, btn)
                             clicked = True
                     except Exception:  # noqa: BLE001
                         pass
@@ -581,7 +585,8 @@ class Watcher:
                     if btn.is_enabled():
                         break
                     self.page.wait_for_timeout(1000)
-                btn.click()
+                human.nap(self.page, 800, 2500)
+                human.click(self.page, btn)
             except Exception as e:  # noqa: BLE001
                 log_event("upload", f"Could not press Continue: {str(e).splitlines()[0][:120]}", "error", screenshot=self.screenshot("passport_error"))
                 self.on_human_needed(f"Passport step for {self.account.name}: press Continue in the bot's browser window")
@@ -623,9 +628,10 @@ class Watcher:
             for _ in range(3):
                 if user.input_value() == self.account.email:
                     return
-                user.fill(self.account.email)
-                self.page.fill("input[formcontrolname='password']", self.account.password)
-                self.page.wait_for_timeout(1500)  # verify it stuck
+                human.wander(self.page, 1)
+                human.type_into(self.page, user, self.account.email)
+                human.type_into(self.page, self.page.locator("input[formcontrolname='password']"), self.account.password)
+                human.nap(self.page, 900, 2200)  # verify it stuck
         except Exception:  # noqa: BLE001
             log.debug("could not pre-fill login form")
 
@@ -637,8 +643,8 @@ class Watcher:
                 raise LoginRequired(self.url)
             dash = self.page.get_by_role("link", name=re.compile(r"^dashboard$", re.I))
             if "/dashboard" not in self.url and dash.count():
-                dash.first.click()            # in-app navigation, no reload
-                self.page.wait_for_timeout(1500)
+                human.click(self.page, dash.first)   # in-app navigation, no reload
+                human.dwell(self.page, 800, 2200)
             elif "/dashboard" not in self.url:
                 self.page.goto(f"{self.cfg.base_url}/dashboard", wait_until="domcontentloaded")
                 self._wait_for_spa()
@@ -646,10 +652,11 @@ class Watcher:
                 raise LoginRequired(self.url)
             btn = self.page.get_by_role("button", name=re.compile(r"start new booking", re.I))
             if btn.count():
-                btn.first.click()
+                human.nap(self.page, 400, 1800)
+                human.click(self.page, btn.first)
             else:
                 self.page.goto(f"{self.cfg.base_url}/application-detail", wait_until="domcontentloaded")
-            self.page.wait_for_timeout(2000)
+            human.dwell(self.page, 1200, 3000)
             if self._on_login_page():
                 raise LoginRequired(self.url)
 
@@ -670,10 +677,10 @@ class Watcher:
         for attempt in range(4):
             try:
                 selects.nth(index).wait_for(state="visible")
-                self.page.wait_for_timeout(600 * attempt)
-                selects.nth(index).click()
+                self.page.wait_for_timeout(human.jitter(300, 900) + 600 * attempt)
+                human.click(self.page, selects.nth(index))
                 options.first.wait_for(state="visible", timeout=8000)
-                self.page.wait_for_timeout(400)
+                human.nap(self.page, 350, 1100)   # read the list
                 texts = [t.strip() for t in options.all_inner_texts()]
                 real = [t for t in texts if t and not t.lower().startswith("select")]
                 if wanted:
@@ -684,8 +691,8 @@ class Watcher:
                     choice = match[0]
                 else:
                     choice = real[0] if real else texts[0]
-                options.get_by_text(choice, exact=True).first.click(timeout=5000)
-                self.page.wait_for_timeout(1500)   # site reloads the next dropdown / slot info from the API
+                human.click(self.page, options.get_by_text(choice, exact=True).first, timeout=5000)
+                human.nap(self.page, 1100, 2600)   # site reloads the next dropdown / slot info from the API
                 return choice
             except RuntimeError:
                 raise
@@ -747,9 +754,7 @@ class Watcher:
         """Nudge the page so VFS's 20-minute idle logout (ng2-idle) doesn't fire between checks."""
         try:
             self._ensure_page()
-            x = random.randint(200, 600)
-            self.page.mouse.move(x, 300)
-            self.page.mouse.move(x + 15, 310)
+            human.wander(self.page, 1)
         except Exception:  # noqa: BLE001
             pass
 
@@ -776,9 +781,10 @@ class Watcher:
 
         # Give the SPA a moment to call CheckIsSlotAvailable and render the message.
         for _ in range(12):
-            self.page.wait_for_timeout(700)
+            self.page.wait_for_timeout(human.jitter(500, 1000))
             if self._last_api is not None:
                 break
+        human.dwell(self.page, 700, 2400)   # "read" the answer
         text = self.page.locator("body").inner_text()
 
         if self._last_api is not None:
@@ -892,8 +898,8 @@ class Watcher:
                             pass
                     else:
                         log.warning("API request not captured — checking all centres through the form (slow)")
-                pause = self.cfg.centre_pause_seconds
-                self.page.wait_for_timeout(int(random.uniform(pause * 0.7, pause * 1.3) * 1000))
+                pause = self.cfg.centre_pause_seconds * 1000
+                self.page.wait_for_timeout(human.jitter(pause * 0.5, pause * 1.7))
             else:
                 self.page.wait_for_timeout(random.randint(400, 900))
             results.append(r)
