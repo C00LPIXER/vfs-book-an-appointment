@@ -55,6 +55,42 @@ BROWSER_CANDIDATES = [
 ]
 
 
+NO_RESTORE_ARGS = ["--disable-blink-features=AutomationControlled", "--no-first-run", "--no-default-browser-check",
+                   "--disable-session-crashed-bubble", "--hide-crash-restore-bubble"]
+
+
+def prepare_profile(profile: Path) -> None:
+    """Stop Chrome/Brave from restoring last session's tabs: mark the last exit as clean and set
+    'open the New Tab page' on startup. Otherwise every launch re-opens old ipify/login tabs and the
+    bot ends up driving a background tab (Turnstile does not run reliably there)."""
+    prefs = profile / "Default" / "Preferences"
+    try:
+        data = json.loads(prefs.read_text()) if prefs.exists() else {}
+    except Exception:  # noqa: BLE001
+        data = {}
+    data.setdefault("profile", {}).update({"exit_type": "Normal", "exited_cleanly": True})
+    data.setdefault("session", {})["restore_on_startup"] = 5
+    data["session"]["startup_urls"] = []
+    prefs.parent.mkdir(parents=True, exist_ok=True)
+    prefs.write_text(json.dumps(data))
+
+
+def single_tab(ctx: BrowserContext) -> Page:
+    """Close whatever tabs the profile opened and return one fresh, foreground tab."""
+    page = ctx.new_page()
+    for pg in list(ctx.pages):
+        if pg is not page:
+            try:
+                pg.close()
+            except Exception:  # noqa: BLE001
+                pass
+    try:
+        page.bring_to_front()
+    except Exception:  # noqa: BLE001
+        pass
+    return page
+
+
 def find_browser(configured: str = "") -> str | None:
     if configured:
         return configured
@@ -140,6 +176,7 @@ class Watcher:
         self._pw = sync_playwright().start()
         profile = Path(self.profile_dir).resolve()
         profile.mkdir(parents=True, exist_ok=True)
+        prepare_profile(profile)
         exe = find_browser(self.cfg.browser.executable)
         if exe:
             log.info("using browser: %s  profile=%s  account=%s", exe, profile.name, self.account.name or "-")
@@ -160,10 +197,10 @@ class Watcher:
             headless=self.cfg.browser.headless,
             no_viewport=True,   # no emulation at all: Cloudflare flags locale/timezone/viewport overrides
             proxy=proxy,
-            args=["--disable-blink-features=AutomationControlled"],
+            args=NO_RESTORE_ARGS,
             ignore_default_args=["--enable-automation"],
         )
-        self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+        self.page = single_tab(self.ctx)
         self.page.set_default_timeout(20_000)
         self.page.on("response", self._on_response)
         return self
@@ -171,7 +208,15 @@ class Watcher:
     def __exit__(self, *exc) -> None:
         try:
             if self.ctx:
+                # leave the profile on a blank tab so nothing sensitive is in "last session"
+                for pg in list(self.ctx.pages):
+                    try:
+                        pg.goto("about:blank", timeout=3000)
+                    except Exception:  # noqa: BLE001
+                        pass
                 self.ctx.close()
+        except Exception:  # noqa: BLE001
+            pass
         finally:
             if self._pw:
                 self._pw.stop()
@@ -194,7 +239,7 @@ class Watcher:
         """Re-open a tab if the user closed it (the persistent context keeps the session)."""
         if self.page is None or self.page.is_closed():
             log.warning("browser tab was closed — opening a new one")
-            self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+            self.page = single_tab(self.ctx)
             self.page.set_default_timeout(20_000)
             self.page.on("response", self._on_response)
 
@@ -204,7 +249,9 @@ class Watcher:
         if "/login" not in self.url:
             return False
         try:
-            return self.page.locator(f"{self.LOGIN_FORM}, {self.OTP_FORM}").count() > 0
+            if self.page.locator(f"{self.LOGIN_FORM}, {self.OTP_FORM}").count() > 0:
+                return True
+            return not self._on_passport_upload()   # blank / still-loading /login is still "not logged in"
         except Exception:  # noqa: BLE001
             return True
 
@@ -274,6 +321,12 @@ class Watcher:
             log.warning("page did not settle within %ss (url=%s)", timeout_ms // 1000, self.url)
         self.page.wait_for_timeout(500)
 
+    def _spa_rendered(self) -> bool:
+        try:
+            return self.page.locator(f"{self.LOGIN_FORM}, {self.OTP_FORM}, {self.DASHBOARD}, input[type=file]").count() > 0
+        except Exception:  # noqa: BLE001
+            return False
+
     def _raise_if_blocked(self) -> None:
         try:
             text = self.page.locator("body").inner_text(timeout=3000)
@@ -319,6 +372,10 @@ class Watcher:
         to clear Cloudflare + press Sign In (or press it ourselves if the check auto-passes)."""
         self.page.goto(f"{self.cfg.base_url}/dashboard", wait_until="domcontentloaded")
         self._wait_for_spa()
+        if not self._spa_rendered():
+            log.warning("VFS page is blank — reloading once")
+            self.page.reload(wait_until="domcontentloaded")
+            self._wait_for_spa()
         self._dismiss_cookie_banner()
         if not self._on_login_page():
             return

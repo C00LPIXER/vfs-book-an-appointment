@@ -260,6 +260,15 @@ def rotate_loop(cfg: Config, once: bool) -> int:
             return 0
         except Exception as e:  # noqa: BLE001
             consecutive_errors += 1
+            if "Target page, context or browser has been closed" in str(e):
+                log.warning("the bot's browser window was closed by hand — retrying in %d min", cfg.rotation.retry_minutes)
+                log_event("error", "Bot browser window was closed by hand — don't close it while a sweep runs; retrying", "warn")
+                _set(st, status="error", task="browser window closed by hand — retrying")
+                delay = cfg.rotation.retry_minutes * 60.0
+                if once:
+                    return 1
+                _sleep_keepalive(None, delay, st)
+                continue
             log.exception("sweep failed (%d in a row)", consecutive_errors)
             log_event("error", f"{type(e).__name__}: {str(e).splitlines()[0][:200]}", "error", {"consecutive": consecutive_errors})
             _set(st, status="error", task=f"{type(e).__name__}: {str(e).splitlines()[0][:120]}")

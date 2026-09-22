@@ -13,7 +13,7 @@ from pathlib import Path
 
 from playwright.sync_api import BrowserContext, Page, TimeoutError as PWTimeout, sync_playwright
 
-from .watcher import find_browser
+from .watcher import NO_RESTORE_ARGS, find_browser, prepare_profile, single_tab
 
 log = logging.getLogger("vfsbot.whatsapp")
 WA_URL = "https://web.whatsapp.com/"
@@ -30,17 +30,16 @@ class WhatsAppWeb:
     def __enter__(self) -> "WhatsAppWeb":
         self._pw = sync_playwright().start()
         Path(self.profile_dir).mkdir(parents=True, exist_ok=True)
+        prepare_profile(Path(self.profile_dir))
         self.ctx = self._pw.chromium.launch_persistent_context(
             self.profile_dir,
             executable_path=find_browser(self.executable),
             headless=False,
             no_viewport=True,
-            args=["--disable-blink-features=AutomationControlled",
-                  "--hide-crash-restore-bubble", "--disable-session-crashed-bubble"],
+            args=NO_RESTORE_ARGS,
             ignore_default_args=["--enable-automation"],
         )
-        self._close_extra_tabs()
-        self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+        self.page = single_tab(self.ctx)
         self.page.set_default_timeout(30_000)
         return self
 
