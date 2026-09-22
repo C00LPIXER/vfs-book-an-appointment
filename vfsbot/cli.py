@@ -333,14 +333,16 @@ def rotate_loop(cfg: Config, once: bool) -> int:
                 raise
             # not a Cloudflare problem — just log in again next round (no cool-off)
             if getattr(e, "after_login", False):
-                what = "VFS session ended during the sweep"
+                # VFS's per-session quota (~7 slot checks, rolling window) ran out: the partial results
+                # were kept, the cursor moved on — wait the normal interval, don't hammer the quota
+                what = "VFS session ended during the sweep (quota spent)"
+                delay = next_delay(cfg)
             else:
                 what = "OTP never arrived" if isinstance(e, OtpRequired) else "login did not complete"
-            log.warning("%s (%s) — next account in %d min", what, acct.name, cfg.rotation.retry_minutes)
-            log_event("login", f"{what} ({acct.name}) — will log in again next round", "warn")
-            _set(st, status="running", task=f"{what} ({acct.name}) — next account in {cfg.rotation.retry_minutes} min",
-                 accounts=pool.status())
-            delay = cfg.rotation.retry_minutes * 60.0
+                delay = cfg.rotation.retry_minutes * 60.0
+            log.warning("%s (%s) — next sweep in %.0f min", what, acct.name, delay / 60)
+            log_event("login", f"{what} ({acct.name}) — next sweep in {delay / 60:.0f} min", "warn")
+            _set(st, status="running", task=f"{what} ({acct.name}) — next sweep in {delay / 60:.0f} min", accounts=pool.status())
         except KeyboardInterrupt:
             _set(st, status="stopped", task="")
             return 0
@@ -408,8 +410,14 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
             results = w.check_all(batch)
         except LoginRequired as e:
             e.after_login = True
+            done = [r for r in w.partial_results if r.source not in ("skipped", "error")]
+            log_event("login", f"VFS session ended during the sweep ({acct.name}) after {len(done)} centre(s) at {w.url}", "warn",
+                      screenshot=w.screenshot("session_ended"))
+            if done:   # keep what was checked; the next login continues from the next centre
+                _set(st, centre_cursor=(start + len(done)) % len(all_centres))
+                _handle_results(w, cfg, st, notifier, done, all_centres)
             raise
-        checked = [r for r in results if r.source != "skipped"]
+        checked = [r for r in results if r.source not in ("skipped", "error")]
         _set(st, centre_cursor=(start + len(checked)) % len(all_centres))
         _handle_results(w, cfg, st, notifier, results, all_centres)
     log.info("browser closed (%s)", acct.name)

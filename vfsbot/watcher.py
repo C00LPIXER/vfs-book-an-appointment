@@ -172,6 +172,7 @@ class Watcher:
         self.imap_error: str = ""
         self.logged_in = False
         self.rate_limited = False
+        self.partial_results: list[SlotResult] = []
         self._pw = None
         self.ctx: BrowserContext | None = None
         self.page: Page | None = None
@@ -238,6 +239,15 @@ class Watcher:
 
     def _on_response(self, resp: Response) -> None:
         url = resp.url
+        if "lift-api" in url and resp.status >= 400 and not (resp.status == 409 and "CheckIsSlotAvailable" in url):
+            # (409 on CheckIsSlotAvailable is VFS's normal "no slots" answer — not an error)
+            path = url.split("lift-api.vfsglobal.com", 1)[-1][:80]
+            try:
+                body = resp.text()[:200]
+            except Exception:  # noqa: BLE001
+                body = ""
+            log.warning("lift-api %s on %s: %s", resp.status, path, body)
+            log_event("check" if resp.status in (409, 429) else "error", f"VFS API {resp.status} on {path}: {body}", "warn", {"status": resp.status})
         if "CheckIsSlotAvailable" in url and resp.status == 429:
             self.rate_limited = True      # VFS's per-session quota is spent: stop asking, or it logs us out
         if "CheckIsSlotAvailable" in url or "/appointment/slots" in url:
@@ -434,6 +444,7 @@ class Watcher:
             if self._is_logged_in() or self._on_passport_upload():
                 log.info("Logged in as %s.", self.account.name)
                 self.logged_in = True
+                self._log_jwt()
                 log_event("login", f"Logged in ({self.account.name}" + (f", ip {self.public_ip}" if self.public_ip else "") + ")", "info")
                 self.page.wait_for_timeout(1500)
                 if self._on_passport_upload():
@@ -521,6 +532,28 @@ class Watcher:
         except Exception:  # noqa: BLE001
             return False
         return True
+
+    def _log_jwt(self) -> None:
+        """Log how long VFS's session token is valid (sessionStorage.JWT exp - iat)."""
+        try:
+            tok = self.page.evaluate("""() => { for (const k of ['JWT','jwt','token','access_token']) { const v = sessionStorage.getItem(k) || localStorage.getItem(k); if (v && v.split('.').length >= 3) return v; }
+                                        const ls = JSON.parse(localStorage.getItem('loginResponse') || 'null'); if (ls && ls.accessToken) return ls.accessToken;
+                                        return 'KEYS:' + Object.keys(sessionStorage).join(',') + '|' + Object.keys(localStorage).join(','); }""")
+            if not tok or tok.startswith("KEYS:") or tok.count(".") < 2:
+                log.info("no JWT found in storage (%s)", tok[:200] if tok else "empty")
+                return
+            import base64
+            payload = tok.split(".")[1] + "=="
+            claims = json.loads(base64.urlsafe_b64decode(payload))
+            exp, iat = claims.get("exp"), claims.get("iat") or claims.get("nbf")
+            if exp:
+                mins = (exp - (iat or time.time())) / 60
+                left = (exp - time.time()) / 60
+                log.info("JWT valid %.1f min (expires in %.1f min)", mins, left)
+                log_event("login", f"Session token valid {mins:.0f} min (expires {left:.0f} min from now)", "info",
+                          {k: claims.get(k) for k in ("exp", "iat", "nbf")})
+        except Exception as e:  # noqa: BLE001
+            log.debug("JWT inspect failed: %s", e)
 
     def _upload_passport(self) -> None:
         """One-time account step after the first login: VFS wants the passport bio page. We select
@@ -820,6 +853,7 @@ class Watcher:
         out), so callers pass a slice of the priority list and we stop at the first 429 — the centres
         left over are reported as 'not checked' and picked up by the next login."""
         results: list[SlotResult] = []
+        self.partial_results = results          # visible to the caller even if we raise mid-way
         centres = list(centres if centres is not None else self.cfg.centre_list)
         api_key, codes = "", {}
         for i, centre in enumerate(centres):
