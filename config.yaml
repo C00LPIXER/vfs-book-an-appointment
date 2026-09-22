@@ -110,3 +110,5 @@ passport_wait_minutes: 10
 team: 4indegree · AAI (Anas and Amal Intelligence)
 ip_rotate:
   enabled: false
+public_interval_seconds: 300
+public_jitter_seconds: 60

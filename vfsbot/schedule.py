@@ -42,8 +42,11 @@ def in_run_window(cfg: Config, now: datetime | None = None) -> tuple[bool, str]:
 
 
 def next_delay(cfg: Config) -> float:
+    """Public mode polls a plain API often; login mode signs in, so it goes far slower."""
     if in_burst_window(cfg):
         base, jitter = cfg.burst.interval_seconds, min(cfg.jitter_seconds, cfg.burst.interval_seconds // 3)
+    elif cfg.mode == "public":
+        base, jitter = cfg.public_interval_seconds, min(cfg.public_jitter_seconds, cfg.public_interval_seconds // 3)
     else:
         base, jitter = cfg.interval_seconds, min(cfg.jitter_seconds, cfg.interval_seconds // 3)
     return max(10.0, base + random.uniform(-jitter, jitter))

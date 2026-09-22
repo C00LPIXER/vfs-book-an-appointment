@@ -129,8 +129,10 @@ class Config(BaseModel):
     # login checks this many centres and the next login continues round the priority list.
     login_centres_per_session: int = 6
     api_replay: bool = False   # replaying the SPA's API call directly gets 401 (per-request signed header); keep off
-    interval_seconds: int = 300
+    interval_seconds: int = 300          # login mode: one login per this interval
     jitter_seconds: int = 45
+    public_interval_seconds: int = 300   # public (no-login) mode: refresh the earliest-date data this often
+    public_jitter_seconds: int = 60
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     burst: BurstConfig = Field(default_factory=BurstConfig)
     notify: NotifyConfig = Field(default_factory=NotifyConfig)

@@ -27,6 +27,7 @@ from .watcher import Blocked, SlotResult, _fmt_date, find_browser, short_centre
 log = logging.getLogger("vfsbot.public")
 
 ENDPOINT = "https://lift-api.vfsglobal.com/appointment/centerwithearliestslot"
+SESSION_FILE = Path("state/public_session.json")   # cf_clearance + token + UA, reused without a browser
 PUBLIC_PAGE = "{base}/"
 SHOTS = Path("state/screenshots")
 
@@ -97,6 +98,50 @@ class PublicWatcher:
             self.page.set_default_timeout(30_000)
             self.page.on("request", self._grab_token)
 
+    # ---- browser-free polling ------------------------------------------------------
+    # Cloudflare only gates the *cookie*: a browser has to mint cf_clearance once (it is bound to
+    # this IP + User-Agent and lasts ~15-30 min), after that the endpoint answers plain HTTP calls.
+    # So the browser is opened only to (re)mint, and every poll in between is a bare httpx request.
+
+    def _save_session(self) -> None:
+        try:
+            cookies = {c["name"]: c["value"] for c in self.ctx.cookies()
+                       if c["name"].startswith("cf_") or c["name"] in ("__cf_bm", "__cflb")}
+            ua = self.page.evaluate("() => navigator.userAgent")
+            if not (cookies.get("cf_clearance") and self._token):
+                return
+            SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+            SESSION_FILE.write_text(json.dumps({"cookies": cookies, "ua": ua, "token": self._token,
+                                                "minted_at": datetime.now().isoformat(timespec="seconds")}, indent=2))
+            log.info("saved Cloudflare session (cf_clearance + token) — next polls need no browser")
+        except Exception as e:  # noqa: BLE001
+            log.debug("could not save session: %s", e)
+
+    @staticmethod
+    def load_session() -> dict | None:
+        try:
+            return json.loads(SESSION_FILE.read_text())
+        except Exception:  # noqa: BLE001
+            return None
+
+    @staticmethod
+    def fetch_direct(sess: dict, timeout: float = 25) -> dict:
+        """Call the endpoint over plain HTTP with a previously minted cookie. Raises Blocked when
+        Cloudflare rejects it (cookie expired / IP changed) so the caller can re-mint."""
+        import httpx
+        headers = {"content-type": "application/json", "accept": "application/json, text/plain, */*",
+                   "x-auth-token": sess["token"], "user-agent": sess["ua"],
+                   "origin": "https://visa.vfsglobal.com", "referer": "https://visa.vfsglobal.com/",
+                   "route": "ind/en/bgr"}
+        r = httpx.post(ENDPOINT, json={"missionCode": "bgr", "countryCode": "ind", "cultureCode": "en-US"},
+                       headers=headers, cookies=sess["cookies"], timeout=timeout)
+        if r.status_code != 200 or not r.text.startswith("{"):
+            raise Blocked(f"{r.status_code}: {r.text[:120]}")
+        data = r.json()
+        if not isinstance(data, dict) or "vacList" not in data:
+            raise Blocked(f"unexpected response: {r.text[:120]}")
+        return data
+
     def screenshot(self, tag: str) -> str | None:
         try:
             self._ensure_page()
@@ -120,6 +165,7 @@ class PublicWatcher:
         body = self.page.locator("body").inner_text()[:200]
         if '"code": "403' in body or "Attention Required" in body:
             raise Blocked(body[:120])
+        self._save_session()
 
     # ---- compatibility shims (the watch loop was written for the login watcher) ----
     on_otp_required = staticmethod(lambda: None)
@@ -209,4 +255,98 @@ class PublicWatcher:
                 results.append(SlotResult(True, _fmt_date(date), "public-api", "", group or {}, centre))
             else:
                 results.append(SlotResult(False, None, "public-api", "", {}, centre))
+        return results
+
+
+class PublicApiWatcher:
+    """The public earliest-date endpoint, with **no browser at all**.
+
+    Cloudflare gates this endpoint on the TLS fingerprint of the client, not on a login: a plain
+    httpx/requests call is answered with 403201, while a client that reproduces Chrome's TLS
+    handshake (curl_cffi's `impersonate`) gets a 200 — no cookie and no x-auth-token needed.
+    A browser is only used as a fallback, if VFS ever starts demanding cf_clearance again.
+    """
+
+    last_raw: dict = {}
+    on_otp_required = staticmethod(lambda: None)
+    on_human_needed = staticmethod(lambda what: None)
+    IMPERSONATE = ["chrome", "chrome124", "chrome120", "safari17_0"]
+
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.last_updated: str = ""
+        self.source: str = ""          # "direct" | "browser"
+
+    def __enter__(self) -> "PublicApiWatcher":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        pass
+
+    # loop shims (the watch loop was written for the login watcher)
+    def ensure_logged_in(self, wait_minutes: int = 0) -> None: ...
+    def keepalive(self) -> None: ...
+    def screenshot(self, tag: str) -> str | None: return None
+
+    def _headers(self) -> dict:
+        h = {"content-type": "application/json", "accept": "application/json, text/plain, */*",
+             "origin": "https://visa.vfsglobal.com", "referer": "https://visa.vfsglobal.com/",
+             "route": "ind/en/bgr"}
+        sess = PublicWatcher.load_session()      # a token from an earlier browser run, if we have one
+        if sess and sess.get("token"):
+            h["x-auth-token"] = sess["token"]
+        return h
+
+    def _fetch_direct(self) -> dict:
+        from curl_cffi import requests as cr
+        payload = {"missionCode": "bgr", "countryCode": "ind", "cultureCode": "en-US"}
+        last = ""
+        for imp in self.IMPERSONATE:
+            try:
+                r = cr.post(ENDPOINT, json=payload, headers=self._headers(), impersonate=imp, timeout=30)
+            except Exception as e:  # noqa: BLE001  (network hiccup, TLS profile unavailable, ...)
+                last = f"{type(e).__name__}: {e}"
+                continue
+            if r.status_code == 200 and r.text.startswith("{"):
+                data = r.json()
+                if isinstance(data, dict) and "vacList" in data:
+                    self.source = f"direct/{imp}"
+                    return data
+            last = f"{r.status_code}: {r.text[:100]}"
+            log.debug("impersonate %s rejected (%s)", imp, last)
+        raise Blocked(last or "no response")
+
+    def _fetch_browser(self) -> dict:
+        """Fallback: mint a session in a real browser and read the data from inside the page."""
+        log.warning("direct call refused — falling back to the browser for this sweep")
+        with PublicWatcher(self.cfg) as w:
+            data = w.raw()
+        self.source = "browser"
+        return data
+
+    def _fetch(self) -> dict:
+        try:
+            data = self._fetch_direct()
+        except Blocked as e:
+            log.info("direct fetch blocked (%s)", str(e)[:80])
+            data = self._fetch_browser()
+        self.last_updated = data.get("lastUpdatedOn", "")
+        return data
+
+    def raw(self) -> dict:
+        return self._fetch()
+
+    def check_all(self) -> list[SlotResult]:
+        data = self._fetch()
+        self.last_raw = data
+        by_centre: dict[str, list[dict]] = {}
+        for vac in data.get("vacList", []):
+            by_centre[short_centre(vac.get("vacName", "")).lower()] = vac.get("visaGroupList", [])
+        cat = (self.cfg.category or "D visa").lower()
+        results: list[SlotResult] = []
+        for centre in self.cfg.centre_list:
+            groups = by_centre.get(short_centre(centre).lower(), [])
+            group = next((g for g in groups if cat in g.get("displayName", "").lower()), None) or (groups[0] if groups else None)
+            date = (group or {}).get("earliestAvailableDate", "")
+            results.append(SlotResult(bool(date), _fmt_date(date) if date else None, "public-api", "", group or {}, centre))
         return results

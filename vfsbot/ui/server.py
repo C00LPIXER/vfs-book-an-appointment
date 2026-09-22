@@ -205,9 +205,14 @@ class Otp(BaseModel):
 
 @app.post("/api/refresh")
 def refresh(instance: str = "public"):
+    """Ask the watcher to sweep right now. If it is not running, start it — it sweeps immediately."""
     inst = instance if instance in INSTANCES else "public"
     (STATE / f"{inst}.sweep_now").touch()
-    return {"ok": True}
+    started = False
+    if not _running(inst):
+        _start_watcher(inst)
+        started = True
+    return {"ok": True, "started": started}
 
 
 @app.post("/api/otp")

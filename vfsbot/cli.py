@@ -19,6 +19,7 @@ log = logging.getLogger("vfsbot")
 
 # Files are namespaced per instance so the public and login watchers can run side by side.
 INSTANCE = "public"
+MODE_OVERRIDE = ""      # set by `watch --mode`; re-applied after every config reload
 STATE_FILE = Path("state/public.json")
 PAUSE_FILE = Path("state/public.paused")
 STOP_FILE = Path("state/public.stop")
@@ -32,6 +33,14 @@ def _set_instance(name: str) -> None:
     PAUSE_FILE = Path(f"state/{name}.paused")
     STOP_FILE = Path(f"state/{name}.stop")
     REFRESH_FILE = Path(f"state/{name}.sweep_now")
+
+
+def _reload_config(path: str | Path = "config.yaml") -> Config:
+    """Pick up dashboard edits without a restart, keeping this instance's --mode override."""
+    cfg = Config.load(path)
+    if MODE_OVERRIDE:
+        cfg.mode = MODE_OVERRIDE
+    return cfg
 
 
 def _load_state() -> dict:
@@ -227,8 +236,8 @@ def cmd_whatsapp_setup(cfg: Config) -> int:
 
 def cmd_watch(cfg: Config, once: bool) -> int:
     if cfg.mode == "public":
-        from .public_watcher import PublicWatcher
-        with PublicWatcher(cfg) as w:
+        from .public_watcher import PublicApiWatcher
+        with PublicApiWatcher(cfg) as w:     # plain HTTPS; a browser only re-mints the CF cookie
             return watch_loop(w, cfg, once)
     if cfg.rotation.enabled and AccountPool().accounts:
         return rotate_loop(cfg, once)
@@ -256,7 +265,7 @@ def rotate_loop(cfg: Config, once: bool) -> int:
         wait = (datetime.fromisoformat(st["next_run_at"]) - datetime.now()).total_seconds() if st.get("next_run_at") else 0
     except Exception:  # noqa: BLE001
         wait = 0
-    if wait > 30 and not REFRESH_FILE.exists():
+    if wait > 30 and not REFRESH_FILE.exists() and STATE_FILE.exists():
         log.info("resuming schedule — next login in %.0f min (use 'Refresh now' to sweep immediately)", wait / 60)
         _set(st, status="running", task="resuming schedule (restart) — waiting for the next login")
         _sleep_keepalive(None, wait, st)
@@ -267,7 +276,7 @@ def rotate_loop(cfg: Config, once: bool) -> int:
             _set(st, status="stopped", task="")
             log_event("control", "Watcher stopped", "info")
             return 0
-        cfg = Config.load()
+        cfg = _reload_config()
         pool = AccountPool()
         delay = next_delay(cfg)
         acct = None
@@ -542,7 +551,7 @@ def watch_loop(w: Watcher, cfg: Config, once: bool) -> int:
             _set(st, status="stopped", task="")
             log_event("control", "Watcher stopped", "info")
             return 0
-        cfg = Config.load()  # pick up UI edits without a restart
+        cfg = _reload_config()  # pick up UI edits without a restart
         w.cfg = cfg
         try:
             allowed, why = in_run_window(cfg)
@@ -640,14 +649,14 @@ def _to_curl(spec: dict) -> str:
 
 
 def cmd_earliest(cfg: Config, category: str, as_json: bool, only_available: bool, as_curl: bool) -> int:
-    from .public_watcher import PublicWatcher
+    from .public_watcher import PublicApiWatcher, PublicWatcher
     from .watcher import short_centre
-    with PublicWatcher(cfg, None) as w:
-        w.load_page()
-        if as_curl:
+    if as_curl:
+        with PublicWatcher(cfg) as w:      # needs a browser: it prints the full browser request
+            w.load_page()
             print(_to_curl(w.request_spec()))
             return 0
-        data = w.raw()
+    data = PublicApiWatcher(cfg).raw()     # no browser
     if as_json:
         print(json.dumps(data, indent=2, ensure_ascii=False))
         return 0
@@ -815,8 +824,10 @@ def main(argv: list[str] | None = None) -> int:
     Path("state").mkdir(exist_ok=True)
     cfg = Config.load(a.config)
     if a.cmd == "watch":
+        global MODE_OVERRIDE
         _set_instance(getattr(a, "instance", "public") or "public")
         if getattr(a, "mode", ""):
+            MODE_OVERRIDE = a.mode
             cfg.mode = a.mode
 
     if a.cmd == "ui":
