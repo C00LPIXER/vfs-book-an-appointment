@@ -258,7 +258,7 @@ def rotate_loop(cfg: Config, once: bool) -> int:
         wait = 0
     if wait > 30 and not REFRESH_FILE.exists():
         log.info("resuming schedule — next login in %.0f min (use 'Refresh now' to sweep immediately)", wait / 60)
-        _set(st, status="running", task=f"resuming schedule — next login at {st['next_run_at'][11:16]}")
+        _set(st, status="running", task="resuming schedule (restart) — waiting for the next login")
         _sleep_keepalive(None, wait, st)
 
     while True:
