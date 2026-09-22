@@ -36,6 +36,9 @@ category: D visa
 subcategory: ''
 centre_pause_seconds: 4.0
 login_centres_per_session: 0
+sweep_all_centres: true
+max_logins_per_sweep: 2
+relogin_gap_seconds: 120
 api_replay: false
 interval_seconds: 3600
 jitter_seconds: 300
@@ -99,11 +102,11 @@ rotation:
   enabled: true
   login_wait_minutes: 3
   cooloff_hours: 2.0
+  account_rest_hours: 2.0
   retry_minutes: 5
   verify_ip: true
   require_proxy: false
   ip_check_url: https://api.ipify.org?format=json
-  account_rest_hours: 2.0
 proxy_auto:
   enabled: false
   provider: digitalocean
@@ -116,9 +119,6 @@ ip_rotate:
   require_change: true
   timeout_seconds: 90
 passport_file: documents/passport_bio.jpg
-passport_auto_continue: false
+passport_auto_continue: true
 passport_wait_minutes: 10
 team: 4indegree · AAI (Anas and Amal Intelligence)
-max_logins_per_sweep: 2
-sweep_all_centres: true
-relogin_gap_seconds: 120
