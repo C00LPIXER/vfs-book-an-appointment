@@ -170,6 +170,11 @@ class Blocked(Exception):
     browsers or after too many requests. Nothing to do but back off / use a visible browser."""
 
 
+class AccountRestricted(Blocked):
+    """VFS restricted this specific account ("Access Restricted for User ID"). Nothing to wait for —
+    the account must be switched off and the next one used."""
+
+
 class CoolOff(Blocked):
     """Cloudflare is in its cool-off state for this account/IP: the Turnstile widget stays blank and
     never produces a token, so sign-in cannot proceed. Rotate to another account + IP and back off."""
@@ -189,6 +194,8 @@ class ProfileInUse(Exception):
 
 
 BLOCK_RE = re.compile(r'"code"\s*:\s*"403\d*"|access denied|attention required|cloudflare', re.I)
+# VFS restricts a single account: "Access Restricted for User ID (429001) ... unusual activity"
+RESTRICTED_RE = re.compile(r"access restricted for user id|unusual activity coming from your user|\b429001\b", re.I)
 
 
 @dataclass
@@ -533,6 +540,12 @@ class Watcher:
             text = self.page.locator("body").inner_text(timeout=3000)
         except Exception:  # noqa: BLE001
             return
+        if RESTRICTED_RE.search(text) or "page-not-found" in self.url and RESTRICTED_RE.search(text):
+            m = re.search(r"Access Restricted for User ID[^\n]*", text, re.I)
+            detail = (m.group(0) if m else "VFS restricted this account").strip()[:160]
+            log_event("blocked", f"{self.account.name}: {detail}", "error", {"url": self.url},
+                      self.screenshot("account_restricted"))
+            raise AccountRestricted(detail)
         if len(text) < 400 and BLOCK_RE.search(text):
             log_event("blocked", "VFS/Cloudflare block page", "error", {"text": text[:200]}, self.screenshot("blocked"))
             raise Blocked(text.strip()[:200])
@@ -596,6 +609,16 @@ class Watcher:
         imap_broken = False
         otp_waited = 0
         while waited < deadline:
+            if waited % 6_000 == 0:
+                self._raise_if_blocked()      # VFS may bounce us to the "account restricted" page
+            if waited % 10_000 == 0:
+                left = (deadline - waited) // 1000
+                if self._on_otp_step():
+                    self.on_status(f"waiting for the OTP mail ({left}s left)")
+                elif self._has_turnstile():
+                    self.on_status(f"waiting for Cloudflare's check ({left}s left)")
+                else:
+                    self.on_status(f"signing in ({left}s left)")
             if self.page.is_closed():
                 self._ensure_page()
                 self.goto(f"{self.cfg.base_url}/dashboard")
@@ -765,8 +788,11 @@ class Watcher:
                   screenshot=self.screenshot("passport_timeout"))
         raise PassportPending(self.url)
 
+    def on_status(self, what: str) -> None:
+        """Hook: the CLI replaces this to show what the login is waiting for on the dashboard."""
+
     def on_human_needed(self, what: str) -> None:
-        """Hook: the CLI replaces this to send a Telegram nudge."""
+        """Hook: the CLI replaces this to send a WhatsApp nudge."""
 
     def on_otp_required(self) -> None:
         """Hook: the CLI replaces this to send a Telegram/email nudge."""

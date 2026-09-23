@@ -357,8 +357,12 @@ def rotate_loop(cfg: Config, once: bool) -> int:
         except (CoolOff, Blocked) as e:
             if acct is None:
                 raise
-            reason = ("Cloudflare will not let this account sign in (the check stays blank)"
-                      if isinstance(e, CoolOff) else f"VFS/Cloudflare blocked this account: {e}")
+            if isinstance(e, AccountRestricted):
+                reason = f"VFS restricted this account — {e}"
+            elif isinstance(e, CoolOff):
+                reason = "Cloudflare will not let this account sign in (the check stays blank)"
+            else:
+                reason = f"VFS/Cloudflare blocked this account: {e}"
             pool.block(acct, reason)
             log.error("%s switched OFF — %s", acct.name, reason)
             log_event("blocked", f"{acct.name} switched off — {reason}", "error", {"account": acct.email})
@@ -521,6 +525,7 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
         w.on_otp_required = lambda: (_set(st, status="needs_human", task=f"waiting for OTP ({acct.name})"),
                                      notifier.otp_needed(str(OTP_FILE)))
         w.on_human_needed = lambda what: (_set(st, status="needs_human", task=what), notifier.human_needed(what))
+        w.on_status = lambda what: _set(st, task=f"{acct.name}: {what}")
         if cfg.rotation.verify_ip:
             _set(st, task=f"checking IP for {acct.name}")
             last_ip = st.get("last_ip", "")
