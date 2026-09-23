@@ -259,6 +259,7 @@ class Watcher:
         self.upload_throttled = False
         self.site_throttled = False
         self._centre_hint = ""
+        self._last_slot_call = 0.0      # monotonic time of the last CheckIsSlotAvailable
         self.partial_results: list[SlotResult] = []
         self._pw = None
         self.ctx: BrowserContext | None = None
@@ -1066,6 +1067,7 @@ class Watcher:
         log.debug("selected: %s", chosen)
         full_centre = chosen[0] if chosen else centre
 
+        self._last_slot_call = time.monotonic()
         # Give the SPA a moment to call CheckIsSlotAvailable and render the message.
         for _ in range(12):
             self.page.wait_for_timeout(human.jitter(500, 1000))
@@ -1132,7 +1134,25 @@ class Watcher:
     API_HEADERS = ("authorize", "content-type")
 
     def _api_request(self, body: dict) -> tuple[int, str]:
+        # VFS answers 401101 "Invalid Request" when two slot checks arrive close together — the
+        # spacing matters more than the headers, so wait out the gap before asking.
+        lo, hi = self.cfg.api_pause_seconds
+        since = time.monotonic() - self._last_slot_call
+        need = random.uniform(lo, hi) - since
+        if need > 0:
+            self.on_status(f"waiting {need:.0f}s before the next centre")
+            self.page.wait_for_timeout(int(need * 1000))
+        self._last_slot_call = time.monotonic()
         hdrs = {k: v for k, v in self._api_template["headers"].items() if k.lower() in self.API_HEADERS}
+        # prefer the token the page is holding right now; it rotates as the session is used
+        try:
+            live = self.page.evaluate("() => sessionStorage.getItem('JWT') || ''")
+            if live:
+                for k in list(hdrs):
+                    if k.lower() == "authorize":
+                        hdrs[k] = live
+        except Exception:  # noqa: BLE001
+            pass
         r = self.page.evaluate(self._FETCH_JS, {"url": self._api_template["url"], "headers": hdrs, "body": body})
         return r["status"], r["text"]
 
@@ -1245,9 +1265,7 @@ class Watcher:
                 pause = self.cfg.centre_pause_seconds * 1000
                 self.page.wait_for_timeout(human.jitter(pause * 0.5, pause * 1.7))
             else:
-                # a direct API check costs ~0.4s, so space them out like a person clicking around
-                lo, hi = self.cfg.api_pause_seconds
-                self.page.wait_for_timeout(int(random.uniform(lo, hi) * 1000))
+                self.page.wait_for_timeout(random.randint(300, 900))   # spacing is enforced per call
             results.append(r)
             log.info("  %s", r.summary())
             if on_progress:
