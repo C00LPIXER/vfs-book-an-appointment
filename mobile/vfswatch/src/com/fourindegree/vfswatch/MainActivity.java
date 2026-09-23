@@ -37,6 +37,7 @@ public class MainActivity extends Activity {
     private LinearLayout list, jsonBox, openBanner;
     private EditText phone, phone2;
     private android.widget.CheckBox smsOn;
+    private TextView proxyState, proxyToggle;
     private boolean showJson;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final SimpleDateFormat clock = new SimpleDateFormat("h:mm a", Locale.ENGLISH);
@@ -60,6 +61,7 @@ public class MainActivity extends Activity {
         tabList = findViewById(R.id.tabList);   tabJson = findViewById(R.id.tabJson);
         live = findViewById(R.id.live);         phone = findViewById(R.id.phone);
         phone2 = findViewById(R.id.phone2);     smsOn = findViewById(R.id.smsOn);
+        proxyState = findViewById(R.id.proxyState); proxyToggle = findViewById(R.id.proxyToggle);
 
         Alerter.ensureChannels(this);
         Alerter.stopRinging();
@@ -106,10 +108,47 @@ public class MainActivity extends Activity {
             public void onClick(View v) { showJson = true; tabs(); }
         });
 
+        proxyToggle.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                Intent i = new Intent(MainActivity.this, ProxyService.class);
+                if (ProxyService.running) {
+                    i.setAction(ProxyService.ACTION_STOP);
+                    startService(i);
+                } else if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
+                ui.postDelayed(new Runnable() { public void run() { renderProxy(); } }, 1200);
+            }
+        });
+
         AlarmReceiver.schedule(this, Prefs.intervalMin(this));
         tabs();
         render();
+        applyCommand(getIntent());
         if (Prefs.of(this).getLong(Prefs.LAST_AT, 0) == 0) check();
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        applyCommand(intent);
+    }
+
+    /**
+     * Lets the PC drive the proxy without touching the screen:
+     *   adb shell am start -n com.fourindegree.vfswatch/.MainActivity -e proxy start|stop
+     * The service itself stays private; only this activity (which the launcher can start anyway)
+     * acts on the request.
+     */
+    private void applyCommand(Intent intent) {
+        String cmd = intent == null ? null : intent.getStringExtra("proxy");
+        if (cmd == null) return;
+        Intent svc = new Intent(this, ProxyService.class);
+        if ("stop".equalsIgnoreCase(cmd)) {
+            svc.setAction(ProxyService.ACTION_STOP);
+            startService(svc);
+        } else if (!ProxyService.running) {
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(svc); else startService(svc);
+        }
+        ui.postDelayed(new Runnable() { public void run() { renderProxy(); } }, 1500);
     }
 
     @Override protected void onResume() {
@@ -144,7 +183,19 @@ public class MainActivity extends Activity {
 
     // ---- drawing ----------------------------------------------------------------
 
+    private void renderProxy() {
+        boolean on = ProxyService.running;
+        proxyState.setText(on
+                ? ("ON — " + (ProxyService.boundTo.isEmpty() ? "starting" : ProxyService.boundTo)
+                   + "  ·  " + SocksServer.connections.get() + " connections, "
+                   + (SocksServer.bytes.get() / 1024) + " KB")
+                : "off");
+        proxyState.setTextColor(on ? 0xFF5BD98A : 0xFF8B97A8);
+        proxyToggle.setText(on ? "Stop sharing" : "Start sharing");
+    }
+
     private void render() {
+        renderProxy();
         String body = Prefs.of(this).getString(Prefs.LAST_JSON, "");
         long at = Prefs.of(this).getLong(Prefs.LAST_AT, 0);
         long nextAt = Prefs.of(this).getLong(Prefs.NEXT_AT, 0);

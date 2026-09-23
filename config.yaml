@@ -129,3 +129,4 @@ passport_file: documents/passport_bio.jpg
 passport_auto_continue: true
 passport_wait_minutes: 10
 team: 4indegree · AAI (Anas and Amal Intelligence)
+public_proxy: socks5h://127.0.0.1:1080

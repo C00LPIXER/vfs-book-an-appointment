@@ -150,6 +150,25 @@
       </LinearLayout>
     </LinearLayout>
 
+    <!-- share this phone's mobile connection with the PC -->
+    <LinearLayout android:orientation="vertical" android:background="@drawable/card"
+        android:padding="16dp" android:layout_marginTop="14dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content">
+      <TextView android:text="SHARE THIS PHONE'S CONNECTION WITH THE PC" android:textColor="#6B7686"
+          android:textSize="10sp" android:letterSpacing="0.08"
+          android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+      <TextView android:id="@+id/proxyState" android:text="off" android:textColor="#C9D3E0"
+          android:textSize="15sp" android:layout_marginTop="4dp"
+          android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+      <TextView android:text="The bot on the PC then browses VFS through this phone's mobile IP, which Cloudflare trusts, while the PC keeps its own line for everything else. Keep the USB cable connected."
+          android:textColor="#55606E" android:textSize="11sp" android:layout_marginTop="6dp"
+          android:layout_width="match_parent" android:layout_height="wrap_content"/>
+      <TextView android:id="@+id/proxyToggle" android:text="Start sharing" android:gravity="center"
+          android:padding="12dp" android:background="@drawable/btn" android:textColor="#C9D3E0"
+          android:textSize="13sp" android:layout_marginTop="10dp"
+          android:layout_width="match_parent" android:layout_height="wrap_content"/>
+    </LinearLayout>
+
     <TextView android:id="@+id/refresh" android:text="Check now" android:gravity="center"
         android:padding="14dp" android:background="@drawable/btn_primary" android:textColor="#0B0E13"
         android:textSize="15sp" android:textStyle="bold" android:layout_marginTop="14dp"

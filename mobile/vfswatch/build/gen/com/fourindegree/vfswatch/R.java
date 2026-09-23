@@ -34,14 +34,16 @@ public final class R {
     public static final int openTitle=0x7f02000b;
     public static final int phone=0x7f02000c;
     public static final int phone2=0x7f02000d;
-    public static final int refresh=0x7f02000e;
-    public static final int save=0x7f02000f;
-    public static final int smsOn=0x7f020010;
-    public static final int tabJson=0x7f020011;
-    public static final int tabList=0x7f020012;
-    public static final int test=0x7f020013;
-    public static final int updated=0x7f020014;
-    public static final int updatedRaw=0x7f020015;
+    public static final int proxyState=0x7f02000e;
+    public static final int proxyToggle=0x7f02000f;
+    public static final int refresh=0x7f020010;
+    public static final int save=0x7f020011;
+    public static final int smsOn=0x7f020012;
+    public static final int tabJson=0x7f020013;
+    public static final int tabList=0x7f020014;
+    public static final int test=0x7f020015;
+    public static final int updated=0x7f020016;
+    public static final int updatedRaw=0x7f020017;
   }
   public static final class layout {
     public static final int main=0x7f030000;

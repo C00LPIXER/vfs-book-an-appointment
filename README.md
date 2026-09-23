@@ -272,7 +272,25 @@ vfsbot ui                                         # dashboard on 127.0.0.1:8787
 The dashboard trusts requests from the machine itself and asks for a password for anything else
 (tunnel, LAN); it lives in `data/ui_auth.json` and `deploy/tunnel.sh` prints it.
 
-### Phone as the bot's IP (`deploy/phone-setup.sh`)
+### Phone as the bot's IP — SOCKS over USB (`deploy/phone-proxy.sh`, recommended)
+
+The Android app (`mobile/vfswatch`) runs a SOCKS5 server on the phone's loopback; `adb forward`
+bridges it to `127.0.0.1:1080` here. Put `socks5://127.0.0.1:1080` in an account's Proxy field (and
+in `public_proxy`) and **only the bot's traffic** leaves through the phone's carrier IP — this
+machine keeps its own line for everything else. The service pins itself to the mobile network, so a
+phone sitting on office WiFi still exits over mobile data.
+
+Measured end to end: exit IP `AS55836 Reliance Jio, mobile: true, hosting: false`; the public
+endpoint answers `200` and the VFS **login form loads in a real browser** — versus `403201` from a
+DigitalOcean IP (`AS14061`, `hosting: true`), which Cloudflare refuses outright.
+
+```bash
+./deploy/phone-proxy.sh          # start sharing, bridge the port, print both IPs
+./deploy/phone-proxy.sh ip       # what the bot would use right now
+./deploy/phone-proxy.sh stop
+```
+
+### Phone as the whole machine's IP — USB tethering (`deploy/phone-setup.sh`)
 
 VFS/Cloudflare refuses **hosting ASNs** outright (`403201`) — measured: a DigitalOcean Bangalore IP
 (`AS14061`, `hosting: true`) is blocked for both curl and a real browser, while the office Airtel
