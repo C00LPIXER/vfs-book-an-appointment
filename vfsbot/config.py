@@ -121,7 +121,9 @@ class IpRotateConfig(BaseModel):
     phone on USB tethering: toggling its mobile data gives a new carrier IP (the kind of IP
     Cloudflare trusts most). Works with any VPN CLI too (e.g. "protonvpn-cli c -r")."""
     enabled: bool = False
-    command: str = "adb shell svc data disable && sleep 4 && adb shell svc data enable && sleep 10"
+    # WiFi off first: tethering over WiFi would share the office line and the IP would never change.
+    command: str = ("adb shell svc wifi disable && adb shell svc data disable && sleep 4"
+                    " && adb shell svc data enable && sleep 12")
     require_change: bool = True      # refuse to log in if the IP did not change from the last login
     timeout_seconds: int = 90
 

@@ -468,15 +468,27 @@ def proxies_status():
 @app.post("/api/ip-rotate/test")
 def ip_rotate_test():
     """Run the IP rotation command once and report before/after (blocks up to ~2 min)."""
+    import subprocess as sp
     from ..cli import _direct_ip, rotate_ip
     from ..watcher import ProxyError
     cfg = Config.load()
+    devices = ""
+    try:
+        out = sp.run(["adb", "devices"], capture_output=True, text=True, timeout=20).stdout
+        devices = ", ".join(l.split()[0] for l in out.splitlines()[1:] if l.strip().endswith("device"))
+    except Exception:  # noqa: BLE001
+        devices = ""
     before = _direct_ip(cfg.rotation.ip_check_url)
     try:
         after = rotate_ip(cfg, before)
-        return {"ok": after != before, "before": before, "after": after}
+        hint = ""
+        if after == before:
+            hint = ("the address did not change — is the phone's WiFi off and is this machine using "
+                    "the phone's USB connection (office WiFi/ethernet disconnected)?")
+        return {"ok": after != before, "before": before, "after": after, "devices": devices, "hint": hint}
     except ProxyError as e:
-        return {"ok": False, "before": before, "after": "", "error": str(e)}
+        hint = "" if devices else "no phone visible to adb — plug it in, allow USB debugging, then retry"
+        return {"ok": False, "before": before, "after": "", "error": str(e), "devices": devices, "hint": hint}
 
 
 @app.post("/api/proxies/manual")
