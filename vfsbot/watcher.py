@@ -260,6 +260,7 @@ class Watcher:
         self.site_throttled = False
         self._centre_hint = ""
         self._last_slot_call = 0.0      # monotonic time of the last CheckIsSlotAvailable
+        self._otp_tried: set[str] = set()
         self.partial_results: list[SlotResult] = []
         self._pw = None
         self.ctx: BrowserContext | None = None
@@ -512,13 +513,19 @@ class Watcher:
             pass
 
     def _try_submit_otp(self) -> bool:
-        """If the user dropped the OTP into state/otp.txt, type it and submit."""
+        """Type the OTP waiting in state/otp.txt and submit it. A code is only ever tried once: the
+        same mail stays the newest in the inbox, so without this the loop would retype a rejected
+        code every few seconds instead of waiting for VFS to send a fresh one."""
         if not OTP_FILE.exists():
             return False
         code = OTP_FILE.read_text().strip()
         OTP_FILE.unlink(missing_ok=True)
         if not code:
             return False
+        if code in self._otp_tried:
+            log.debug("OTP %s already tried — waiting for a newer one", code)
+            return False
+        self._otp_tried.add(code)
         box = self.page.locator(self.OTP_FORM).first
         if not box.count():
             box = self.page.locator("input:not([type=hidden])").last
@@ -661,7 +668,7 @@ class Watcher:
                     log_event("otp", f"OTP requested by VFS for {self.account.name}" +
                               (" — reading it from the inbox" if self.account.imap_password else " — no App Password: type it in the dashboard"), "warn")
                     otp_announced = True
-                    otp_asked_at = datetime.now().astimezone()
+                    otp_asked_at = otp_since = datetime.now().astimezone()
                     otp_waited = 0
                     if not self.account.imap_password:
                         self.on_otp_required()      # nobody can fetch it for us: tell the humans right away
@@ -673,7 +680,7 @@ class Watcher:
                 if not self._try_submit_otp() and waited % 10_000 == 0 and self.account.imap_password and not imap_broken:
                     try:
                         code = fetch_latest_otp(self.account.imap_host, self.account.imap_login,
-                                                self.account.imap_password, not_before=otp_asked_at)
+                                                self.account.imap_password, not_before=otp_since)
                     except ImapAuthError as e:
                         imap_broken = True   # don't hammer Google with a bad password; a human must fix it
                         msg = (f"OTP inbox login FAILED for {self.account.name} ({self.account.imap_login}): {e} — "
@@ -683,11 +690,17 @@ class Watcher:
                         self.imap_error = str(e)[:160]
                         self.on_human_needed(msg)
                         code = None
-                    if code:
+                    if code and code not in self._otp_tried:
                         OTP_FILE.parent.mkdir(parents=True, exist_ok=True)
                         OTP_FILE.write_text(code)
                         log_event("otp", "OTP fetched automatically from inbox", "info")
                         self._try_submit_otp()
+                    elif code:
+                        # that code was rejected — from now on only take a mail sent after it
+                        otp_since = datetime.now().astimezone()
+                        if len(self._otp_tried) == 2:
+                            log_event("otp", f"VFS rejected the OTP for {self.account.name} — waiting for a new one", "warn")
+                        self.on_status(f"OTP rejected — waiting for a fresh one ({len(self._otp_tried)} tried)")
             else:
                 # If Turnstile has already produced a token and the button is enabled, click once.
                 if not clicked and self.account.email:
