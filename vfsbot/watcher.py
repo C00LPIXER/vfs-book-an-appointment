@@ -15,6 +15,7 @@ import os
 import random
 import re
 import shutil
+import sys
 import time
 from datetime import datetime
 from dataclasses import dataclass, field
@@ -55,11 +56,29 @@ class PassportPending(LoginRequired):
 
 
 OTP_FILE = Path("state/otp.txt")
-BROWSER_CANDIDATES = [
-    "/opt/brave.com/brave/brave", "brave-browser", "brave",
-    "/opt/google/chrome/chrome", "google-chrome", "google-chrome-stable",
-    "chromium", "chromium-browser",
-]
+def _browser_candidates() -> list[str]:
+    """Where a real Brave/Chrome lives, per platform. VFS blocks Playwright's own Chromium, so
+    finding the installed browser is not optional — an empty result means the bot cannot work."""
+    if sys.platform == "win32":
+        roots = [os.environ.get("PROGRAMFILES", r"C:\Program Files"),
+                 os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"),
+                 os.environ.get("LOCALAPPDATA", "")]
+        rel = [r"BraveSoftware\Brave-Browser\Application\brave.exe",
+               r"Google\Chrome\Application\chrome.exe",
+               r"Microsoft\Edge\Application\msedge.exe"]
+        return [str(Path(r) / x) for r in roots if r for x in rel]
+    if sys.platform == "darwin":
+        return ["/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "brave-browser", "google-chrome"]
+    return [
+        "/opt/brave.com/brave/brave", "brave-browser", "brave",
+        "/opt/google/chrome/chrome", "google-chrome", "google-chrome-stable",
+        "chromium", "chromium-browser",
+    ]
+
+
+BROWSER_CANDIDATES = _browser_candidates()
 
 
 NO_RESTORE_ARGS = ["--disable-blink-features=AutomationControlled", "--no-first-run", "--no-default-browser-check",
@@ -155,13 +174,17 @@ def _fill_xauthority() -> None:
 
 
 def find_browser(configured: str = "") -> str | None:
+    """The configured path wins; otherwise the first installed candidate for this platform."""
     if configured:
         return configured
     for c in BROWSER_CANDIDATES:
-        if c.startswith("/") and Path(c).exists():
-            return c
-        if not c.startswith("/") and shutil.which(c):
-            return shutil.which(c)
+        if os.path.sep in c or (sys.platform == "win32" and ":" in c):
+            if Path(c).exists():
+                return c
+        else:
+            found = shutil.which(c)
+            if found:
+                return found
     return None
 
 

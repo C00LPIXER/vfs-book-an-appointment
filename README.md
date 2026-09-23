@@ -285,6 +285,25 @@ needs-human, errors, heartbeat). The profile suppresses session-restore so it op
 
 ## 7. Running it on another machine
 
+### Windows
+
+```
+git clone <repo>
+cd vfs-book-an-appointment
+run.bat
+```
+
+`run.bat` creates the virtual environment on first run, installs everything, checks that a real
+Brave/Chrome is present (`%PROGRAMFILES%`, `%PROGRAMFILES(X86)%`, `%LOCALAPPDATA%` are searched) and
+opens the dashboard. Requires Python 3.11+ with "Add python.exe to PATH" ticked, and Brave or
+Chrome — Playwright's bundled Chromium is refused by VFS.
+
+Linux/macOS paths are detected the same way; set `browser.executable` in `config.yaml` to override.
+What is **not** available on Windows: `deploy/*.sh` (tunnel, phone proxy, systemd) — use WSL, or run
+the phone proxy from a Linux box.
+
+### Linux / macOS
+
 No AI or API keys at runtime — the bot is plain Python (Playwright drives a real Brave, `curl_cffi`
 calls the public endpoint, FastAPI serves the dashboard, IMAP reads the OTP).
 
