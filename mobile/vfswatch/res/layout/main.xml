@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="#0E1116" android:padding="18dp">
+  <LinearLayout android:orientation="vertical"
+      android:layout_width="match_parent" android:layout_height="wrap_content">
+
+    <TextView android:text="VFS D-Visa Watch"
+        android:textColor="#E6EAF2" android:textSize="20sp" android:textStyle="bold"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+    <TextView android:text="Bulgaria · India · public data"
+        android:textColor="#7C8798" android:textSize="12sp" android:layout_marginBottom="16dp"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+
+    <TextView android:id="@+id/updated" android:text="No data yet"
+        android:textColor="#FF9A3C" android:textSize="22sp" android:textStyle="bold"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+    <TextView android:id="@+id/detail" android:textColor="#7C8798" android:textSize="12sp"
+        android:layout_marginBottom="14dp" android:fontFamily="monospace"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+    <TextView android:id="@+id/rows" android:textColor="#C9D3E0" android:textSize="13sp"
+        android:fontFamily="monospace" android:background="#161B22" android:padding="12dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+    <TextView android:text="Ring this number when a slot opens"
+        android:textColor="#7C8798" android:textSize="12sp" android:layout_marginTop="18dp"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+    <EditText android:id="@+id/phone" android:inputType="phone" android:hint="+91…"
+        android:textColor="#E6EAF2" android:textColorHint="#55606E" android:backgroundTint="#39424F"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+    <LinearLayout android:orientation="horizontal" android:layout_marginTop="12dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content">
+      <Button android:id="@+id/save" android:text="Save"
+          android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"/>
+      <Button android:id="@+id/refresh" android:text="Check now"
+          android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"/>
+      <Button android:id="@+id/test" android:text="Test alarm"
+          android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"/>
+    </LinearLayout>
+
+    <TextView android:text="Checks every hour by itself, also after a reboot. Opening the app stops the alarm."
+        android:textColor="#55606E" android:textSize="11sp" android:layout_marginTop="14dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+  </LinearLayout>
+</ScrollView>
