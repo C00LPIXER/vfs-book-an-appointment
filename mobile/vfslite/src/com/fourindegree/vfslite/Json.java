@@ -1,4 +1,4 @@
-package com.fourindegree.vfswatch;
+package com.fourindegree.vfslite;
 
 import org.json.JSONArray;
 import org.json.JSONObject;

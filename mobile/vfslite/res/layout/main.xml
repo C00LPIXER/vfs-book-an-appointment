@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="#0B0E13" android:fillViewport="true">
+
+  <LinearLayout android:orientation="vertical" android:padding="18dp"
+      android:layout_width="match_parent" android:layout_height="wrap_content">
+
+    <TextView android:text="VFS Slot Status" android:textColor="#F0F3F8"
+        android:textSize="22sp" android:textStyle="bold"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+    <TextView android:text="Bulgaria long-stay D visa · India"
+        android:textColor="#6B7686" android:textSize="12sp"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+
+    <!-- the headline: is anything open -->
+    <LinearLayout android:id="@+id/verdictBox" android:orientation="vertical"
+        android:background="@drawable/card" android:padding="22dp" android:layout_marginTop="16dp"
+        android:gravity="center"
+        android:layout_width="match_parent" android:layout_height="wrap_content">
+      <TextView android:id="@+id/verdict" android:text="…" android:textColor="#C9D3E0"
+          android:textSize="26sp" android:textStyle="bold" android:gravity="center"
+          android:layout_width="match_parent" android:layout_height="wrap_content"/>
+      <TextView android:id="@+id/verdictSub" android:textColor="#8B97A8" android:textSize="13sp"
+          android:gravity="center" android:layout_marginTop="6dp"
+          android:layout_width="match_parent" android:layout_height="wrap_content"/>
+    </LinearLayout>
+
+    <!-- the two times, side by side -->
+    <LinearLayout android:orientation="horizontal" android:layout_marginTop="12dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content">
+      <LinearLayout android:orientation="vertical" android:background="@drawable/card"
+          android:padding="14dp" android:layout_marginEnd="6dp"
+          android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content">
+        <TextView android:text="VFS UPDATED" android:textColor="#6B7686" android:textSize="10sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/updated" android:text="—" android:textColor="#FF9A3C"
+            android:textSize="17sp" android:textStyle="bold" android:layout_marginTop="2dp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/updatedRaw" android:textColor="#55606E" android:textSize="10sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+      </LinearLayout>
+      <LinearLayout android:orientation="vertical" android:background="@drawable/card"
+          android:padding="14dp" android:layout_marginStart="6dp"
+          android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content">
+        <TextView android:text="NEXT UPDATE" android:textColor="#6B7686" android:textSize="10sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/next" android:text="—" android:textColor="#7FD1FF"
+            android:textSize="17sp" android:textStyle="bold" android:layout_marginTop="2dp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/nextRaw" android:textColor="#55606E" android:textSize="10sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+      </LinearLayout>
+    </LinearLayout>
+
+    <TextView android:text="ALL 15 CENTRES" android:textColor="#6B7686" android:textSize="10sp"
+        android:letterSpacing="0.12" android:layout_marginTop="18dp" android:layout_marginBottom="8dp"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+
+    <LinearLayout android:id="@+id/list" android:orientation="vertical"
+        android:background="@drawable/card" android:padding="6dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+    <TextView android:id="@+id/refresh" android:text="Refresh" android:gravity="center"
+        android:padding="15dp" android:background="@drawable/btn_primary" android:textColor="#0B0E13"
+        android:textSize="15sp" android:textStyle="bold" android:layout_marginTop="16dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+    <TextView android:id="@+id/error" android:textColor="#E5534B" android:textSize="11sp"
+        android:gravity="center" android:layout_marginTop="10dp" android:visibility="gone"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+    <TextView android:text="Checks by itself every hour and sends a notification the moment a date appears. Nothing to set up."
+        android:textColor="#4A5462" android:textSize="11sp" android:gravity="center"
+        android:layout_marginTop="14dp" android:layout_marginBottom="8dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+  </LinearLayout>
+</ScrollView>

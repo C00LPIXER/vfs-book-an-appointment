@@ -1,4 +1,4 @@
-package com.fourindegree.vfswatch;
+package com.fourindegree.vfslite;
 
 import android.app.Notification;
 import android.app.Service;
@@ -14,7 +14,7 @@ import android.os.PowerManager;
  */
 public class PollService extends Service {
 
-    static final String ACTION_DONE = "com.fourindegree.vfswatch.CHECK_DONE";
+    static final String ACTION_DONE = "com.fourindegree.vfslite.CHECK_DONE";
 
     @Override public IBinder onBind(Intent i) { return null; }
 
@@ -23,7 +23,7 @@ public class PollService extends Service {
         startForeground(1, status("Checking VFS…"));
 
         final PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-        final PowerManager.WakeLock lock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "vfswatch:poll");
+        final PowerManager.WakeLock lock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "vfslite:poll");
         lock.acquire(140_000);
 
         new Fetcher(getApplicationContext()).fetch(new Fetcher.Result() {
@@ -86,13 +86,7 @@ public class PollService extends Service {
         String title = snap.open.size() == 1
                 ? ("D VISA OPEN — " + snap.open.get(0).centre)
                 : ("D VISA OPEN — " + snap.open.size() + " centres");
-        String body = text.toString().trim();
-        Alerter.slotFound(this, title, body);
-        Alerter.startRinging(this);
-        if (Prefs.sms(this))
-            Alerter.sms(this, "VFS D-VISA OPEN\n" + body + "\nvisa.vfsglobal.com/ind/en/bgr",
-                    Prefs.phone(this), Prefs.phone2(this));
-        Alerter.call(this, Prefs.phone(this));      // Android can ring only one number at a time
+        Alerter.slotFound(this, title, text.toString().trim());
     }
 
     private void finish(PowerManager.WakeLock lock) {
