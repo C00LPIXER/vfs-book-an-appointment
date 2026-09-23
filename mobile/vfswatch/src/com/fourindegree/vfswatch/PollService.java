@@ -24,24 +24,47 @@ public class PollService extends Service {
 
         final PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         final PowerManager.WakeLock lock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "vfswatch:poll");
-        lock.acquire(90_000);
+        lock.acquire(140_000);
 
         new Fetcher(getApplicationContext()).fetch(new Fetcher.Result() {
             @Override public void ok(String json) {
+                Json.Snapshot snap = Json.parse(json, Prefs.category(PollService.this));
                 Prefs.put(PollService.this, Prefs.LAST_JSON, json);
                 Prefs.put(PollService.this, Prefs.LAST_AT, System.currentTimeMillis());
                 Prefs.put(PollService.this, Prefs.LAST_ERROR, "");
-                handle(Json.parse(json, Prefs.category(PollService.this)));
+                handle(snap);
+                AlarmReceiver.schedule(PollService.this, nextCheckIn(snap));
                 finish(lock);
             }
             @Override public void failed(String reason) {
                 Prefs.put(PollService.this, Prefs.LAST_ERROR, reason);
                 Prefs.put(PollService.this, Prefs.LAST_AT, System.currentTimeMillis());
+                AlarmReceiver.schedule(PollService.this, 10);     // try again shortly
                 finish(lock);
             }
-        }, 75_000);
+        }, 110_000);
 
         return START_NOT_STICKY;
+    }
+
+    /**
+     * VFS republishes its earliest-date data roughly hourly and tells us how old the current copy
+     * is ("last updated 35 minutes back"). So the next check is booked for when that copy is about
+     * to be replaced — 60 minus its age, plus 3 minutes of margin — which keeps every check landing
+     * on fresh data instead of drifting against VFS's cycle.
+     */
+    private int nextCheckIn(Json.Snapshot s) {
+        int ageMin = -1;
+        if (s.updatedValue >= 0) {
+            String t = s.updatedType == null ? "M" : s.updatedType.toUpperCase();
+            if (t.startsWith("S")) ageMin = 0;
+            else if (t.startsWith("H")) ageMin = s.updatedValue * 60;
+            else if (t.startsWith("D")) ageMin = s.updatedValue * 1440;
+            else ageMin = s.updatedValue;
+        }
+        if (ageMin < 0 || ageMin > 180) return Prefs.intervalMin(this);   // stamp missing or odd
+        int wait = 60 - (ageMin % 60) + 3;
+        return Math.max(5, Math.min(65, wait));
     }
 
     /** Alarm only on a *new* opening: the same centres+dates do not ring again and again. */
@@ -63,9 +86,13 @@ public class PollService extends Service {
         String title = snap.open.size() == 1
                 ? ("D VISA OPEN — " + snap.open.get(0).centre)
                 : ("D VISA OPEN — " + snap.open.size() + " centres");
-        Alerter.slotFound(this, title, text.toString().trim());
+        String body = text.toString().trim();
+        Alerter.slotFound(this, title, body);
         Alerter.startRinging(this);
-        Alerter.call(this, Prefs.phone(this));
+        if (Prefs.sms(this))
+            Alerter.sms(this, "VFS D-VISA OPEN\n" + body + "\nvisa.vfsglobal.com/ind/en/bgr",
+                    Prefs.phone(this), Prefs.phone2(this));
+        Alerter.call(this, Prefs.phone(this));      // Android can ring only one number at a time
     }
 
     private void finish(PowerManager.WakeLock lock) {

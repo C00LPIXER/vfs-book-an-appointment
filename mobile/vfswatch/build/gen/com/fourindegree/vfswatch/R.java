@@ -9,16 +9,39 @@ package com.fourindegree.vfswatch;
 
 public final class R {
   public static final class drawable {
-    public static final int ic_launcher=0x7f010000;
+    public static final int btn=0x7f010000;
+    public static final int btn_primary=0x7f010001;
+    public static final int card=0x7f010002;
+    public static final int field=0x7f010003;
+    public static final int ic_launcher=0x7f010004;
+    public static final int pill_none=0x7f010005;
+    public static final int pill_ok=0x7f010006;
+    public static final int tab_off=0x7f010007;
+    public static final int tab_on=0x7f010008;
   }
   public static final class id {
-    public static final int detail=0x7f020000;
-    public static final int phone=0x7f020001;
-    public static final int refresh=0x7f020002;
-    public static final int rows=0x7f020003;
-    public static final int save=0x7f020004;
-    public static final int test=0x7f020005;
-    public static final int updated=0x7f020006;
+    public static final int checked=0x7f020000;
+    public static final int copy=0x7f020001;
+    public static final int error=0x7f020002;
+    public static final int foot=0x7f020003;
+    public static final int json=0x7f020004;
+    public static final int jsonBox=0x7f020005;
+    public static final int list=0x7f020006;
+    public static final int live=0x7f020007;
+    public static final int next=0x7f020008;
+    public static final int openBanner=0x7f020009;
+    public static final int openBody=0x7f02000a;
+    public static final int openTitle=0x7f02000b;
+    public static final int phone=0x7f02000c;
+    public static final int phone2=0x7f02000d;
+    public static final int refresh=0x7f02000e;
+    public static final int save=0x7f02000f;
+    public static final int smsOn=0x7f020010;
+    public static final int tabJson=0x7f020011;
+    public static final int tabList=0x7f020012;
+    public static final int test=0x7f020013;
+    public static final int updated=0x7f020014;
+    public static final int updatedRaw=0x7f020015;
   }
   public static final class layout {
     public static final int main=0x7f030000;

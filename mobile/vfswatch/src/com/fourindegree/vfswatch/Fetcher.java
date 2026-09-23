@@ -3,21 +3,28 @@ package com.fourindegree.vfswatch;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
-import android.webkit.ValueCallback;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import java.util.Map;
+
 /**
- * Reads VFS's public "earliest available date" endpoint.
+ * Reads VFS's public "earliest available date" endpoint — the data behind the site's
+ * "Find the Earliest Available Appointment Date" box.
  *
- * It has to go through a WebView: the endpoint sits behind Cloudflare, which checks the TLS
- * fingerprint of the client. A normal HttpURLConnection/OkHttp call is answered with 403205 even
- * with perfect headers, while Chromium (which WebView is) gets a 200. So we load the public VFS
- * page — that passes Cloudflare and sets its cookies — and then run the same in-page fetch() the
- * site itself uses.
+ * Three things matter here, and each of them broke the first attempts:
+ *
+ *  1. Cloudflare scores the TLS fingerprint. HttpURLConnection/OkHttp get 403205; Chromium gets 200,
+ *     so the call is made inside a WebView sitting on the real VFS page.
+ *  2. The request must look like the site's own — same origin and cookies, the x-auth-token the SPA
+ *     sends, and no invented headers (an extra one turns it into a CORS preflight VFS refuses).
+ *  3. `evaluateJavascript` does NOT wait for a Promise: an async function hands back "null" straight
+ *     away. The result therefore comes back through a JavascriptInterface callback instead.
  */
 class Fetcher {
 
@@ -29,24 +36,19 @@ class Fetcher {
     private static final String PAGE = "https://visa.vfsglobal.com/ind/en/bgr/";
     private static final String ENDPOINT = "https://lift-api.vfsglobal.com/appointment/centerwithearliestslot";
 
-    private static final String JS =
-        "(async () => { try {" +
-        "  const r = await fetch('" + ENDPOINT + "', {method:'POST'," +
-        "     headers:{'content-type':'application/json','accept':'application/json, text/plain, */*'," +
-        "              'route':'ind/en/bgr'}," +
-        "     body: JSON.stringify({missionCode:'bgr',countryCode:'ind',cultureCode:'en-US'})});" +
-        "  return JSON.stringify({status:r.status, body: await r.text()});" +
-        "} catch (e) { return JSON.stringify({status:0, body:String(e)}); } })()";
-
     private final Context ctx;
+    private final Handler main = new Handler(Looper.getMainLooper());
     private WebView web;
+    private Result cb;
     private boolean done;
+    private int tries;
+    private String token;               // x-auth-token, copied from the page's own request
+    private String lastError = "";
 
     Fetcher(Context ctx) { this.ctx = ctx; }
 
-    /** Loads the page, waits for Cloudflare, then asks for the JSON. Always calls back exactly once. */
     void fetch(final Result cb, final int timeoutMs) {
-        final Handler main = new Handler(Looper.getMainLooper());
+        this.cb = cb;
         main.post(new Runnable() { public void run() {
             try {
                 web = new WebView(ctx);
@@ -54,42 +56,72 @@ class Fetcher {
                 s.setJavaScriptEnabled(true);
                 s.setDomStorageEnabled(true);
                 s.setDatabaseEnabled(true);
-                // never announce ourselves as a WebView: Cloudflare scores "; wv)" user agents lower
                 s.setUserAgentString(s.getUserAgentString().replace("; wv", ""));
+                web.addJavascriptInterface(new Bridge(), "VfsBridge");
+
                 web.setWebViewClient(new WebViewClient() {
+                    @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
+                        try {   // the page calls the endpoint itself — borrow its auth header
+                            if (req != null && req.getUrl() != null
+                                    && req.getUrl().toString().toLowerCase().contains("centerwithearliestslot")) {
+                                Map<String, String> h = req.getRequestHeaders();
+                                if (h != null) for (Map.Entry<String, String> e : h.entrySet())
+                                    if (e.getKey().equalsIgnoreCase("x-auth-token")) token = e.getValue();
+                            }
+                        } catch (Throwable ignored) { }
+                        return null;
+                    }
                     @Override public void onPageFinished(WebView v, String url) {
-                        // give Cloudflare's script a moment to settle before asking
-                        main.postDelayed(new Runnable() { public void run() { ask(cb); } }, 6000);
+                        main.postDelayed(new Runnable() { public void run() { ask(); } }, 5000);
                     }
                     @Override public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
-                        if (req != null && req.isForMainFrame()) finish(cb, false, "page failed: " + err.getDescription());
+                        if (req != null && req.isForMainFrame()) lastError = "page: " + err.getDescription();
                     }
                 });
+
                 web.loadUrl(PAGE);
                 main.postDelayed(new Runnable() { public void run() {
-                    finish(cb, false, "timed out after " + (timeoutMs / 1000) + "s");
+                    finish(false, lastError.isEmpty() ? ("no answer within " + (timeoutMs / 1000) + "s")
+                                                      : (lastError + " (gave up after " + (timeoutMs / 1000) + "s)"));
                 } }, timeoutMs);
             } catch (Throwable t) {
-                finish(cb, false, t.getClass().getSimpleName() + ": " + t.getMessage());
+                finish(false, t.getClass().getSimpleName() + ": " + t.getMessage());
             }
         } });
     }
 
-    private void ask(final Result cb) {
+    /** Runs the site's own request and hands the answer back through the bridge. */
+    private void ask() {
         if (done || web == null) return;
-        web.evaluateJavascript(JS, new ValueCallback<String>() {
-            public void onReceiveValue(String value) {
-                // value is a JSON string literal containing our JSON — unwrap it
-                String inner = Json.unquote(value);
-                int status = Json.intField(inner, "status");
-                String body = Json.stringField(inner, "body");
-                if (status == 200 && body != null && body.startsWith("{")) finish(cb, true, body);
-                else finish(cb, false, status == 0 ? "no response from VFS" : ("VFS answered " + status));
-            }
-        });
+        tries++;
+        String hdr = "'content-type':'application/json'";
+        if (token != null && !token.isEmpty()) hdr += ",'x-auth-token':'" + token.replace("'", "") + "'";
+        String js =
+            "(function(){ try {" +
+            "  fetch('" + ENDPOINT + "', {method:'POST', credentials:'include'," +
+            "     headers:{" + hdr + "}," +
+            "     body: JSON.stringify({missionCode:'bgr',countryCode:'ind',cultureCode:'en-US'})})" +
+            "   .then(function(r){ return r.text().then(function(t){ VfsBridge.result(r.status, t); }); })" +
+            "   .catch(function(e){ VfsBridge.result(0, String(e)); });" +
+            "} catch (e) { VfsBridge.result(0, 'threw ' + String(e)); } })()";
+        web.evaluateJavascript(js, null);
     }
 
-    private void finish(final Result cb, final boolean ok, final String payload) {
+    /** JS calls this when the request finishes — it runs on a WebView thread, so hop to main. */
+    private class Bridge {
+        @JavascriptInterface public void result(final int status, final String body) {
+            main.post(new Runnable() { public void run() {
+                if (done) return;
+                if (status == 200 && body != null && body.trim().startsWith("{")) { finish(true, body); return; }
+                lastError = (status == 0 ? "network: " : ("VFS answered " + status + " "))
+                        + (body == null ? "" : body.replaceAll("\\s+", " ").trim());
+                if (tries >= 8) { finish(false, lastError); return; }
+                main.postDelayed(new Runnable() { public void run() { ask(); } }, 6000);
+            } });
+        }
+    }
+
+    private void finish(final boolean ok, final String payload) {
         if (done) return;
         done = true;
         if (web != null) { web.stopLoading(); web.destroy(); web = null; }

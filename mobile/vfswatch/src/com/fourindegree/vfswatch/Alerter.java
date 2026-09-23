@@ -97,6 +97,28 @@ class Alerter {
         ((NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE)).notify(100, b.build());
     }
 
+    /** Texts every number given. Long messages are split automatically. */
+    static int sms(Context c, String text, String... numbers) {
+        int sent = 0;
+        android.telephony.SmsManager sm;
+        try {
+            sm = Build.VERSION.SDK_INT >= 31
+                    ? c.getSystemService(android.telephony.SmsManager.class)
+                    : android.telephony.SmsManager.getDefault();
+        } catch (Throwable t) { return 0; }
+        if (sm == null) return 0;
+        for (String n : numbers) {
+            if (n == null || n.trim().isEmpty()) continue;
+            try {
+                java.util.ArrayList<String> parts = sm.divideMessage(text);
+                if (parts.size() > 1) sm.sendMultipartTextMessage(n.trim(), null, parts, null, null);
+                else sm.sendTextMessage(n.trim(), null, text, null, null);
+                sent++;
+            } catch (Throwable ignored) { }
+        }
+        return sent;
+    }
+
     /** Places the call. Needs CALL_PHONE granted; without it we just leave the notification. */
     static boolean call(Context c, String number) {
         if (number == null || number.trim().isEmpty()) return false;

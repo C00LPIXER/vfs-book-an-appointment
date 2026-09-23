@@ -1,47 +1,164 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent" android:layout_height="match_parent"
-    android:background="#0E1116" android:padding="18dp">
-  <LinearLayout android:orientation="vertical"
+    android:background="#0B0E13" android:fillViewport="true">
+
+  <LinearLayout android:orientation="vertical" android:padding="16dp"
       android:layout_width="match_parent" android:layout_height="wrap_content">
 
-    <TextView android:text="VFS D-Visa Watch"
-        android:textColor="#E6EAF2" android:textSize="20sp" android:textStyle="bold"
-        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
-    <TextView android:text="Bulgaria · India · public data"
-        android:textColor="#7C8798" android:textSize="12sp" android:layout_marginBottom="16dp"
-        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
-
-    <TextView android:id="@+id/updated" android:text="No data yet"
-        android:textColor="#FF9A3C" android:textSize="22sp" android:textStyle="bold"
-        android:layout_width="match_parent" android:layout_height="wrap_content"/>
-    <TextView android:id="@+id/detail" android:textColor="#7C8798" android:textSize="12sp"
-        android:layout_marginBottom="14dp" android:fontFamily="monospace"
-        android:layout_width="match_parent" android:layout_height="wrap_content"/>
-
-    <TextView android:id="@+id/rows" android:textColor="#C9D3E0" android:textSize="13sp"
-        android:fontFamily="monospace" android:background="#161B22" android:padding="12dp"
-        android:layout_width="match_parent" android:layout_height="wrap_content"/>
-
-    <TextView android:text="Ring this number when a slot opens"
-        android:textColor="#7C8798" android:textSize="12sp" android:layout_marginTop="18dp"
-        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
-    <EditText android:id="@+id/phone" android:inputType="phone" android:hint="+91…"
-        android:textColor="#E6EAF2" android:textColorHint="#55606E" android:backgroundTint="#39424F"
-        android:layout_width="match_parent" android:layout_height="wrap_content"/>
-
-    <LinearLayout android:orientation="horizontal" android:layout_marginTop="12dp"
+    <!-- header -->
+    <LinearLayout android:orientation="horizontal" android:gravity="center_vertical"
         android:layout_width="match_parent" android:layout_height="wrap_content">
-      <Button android:id="@+id/save" android:text="Save"
+      <LinearLayout android:orientation="vertical" android:layout_weight="1"
+          android:layout_width="0dp" android:layout_height="wrap_content">
+        <TextView android:text="VFS D-Visa Watch" android:textColor="#F0F3F8"
+            android:textSize="19sp" android:textStyle="bold"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <TextView android:text="Bulgaria · India · earliest available date"
+            android:textColor="#6B7686" android:textSize="11sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+      </LinearLayout>
+      <TextView android:id="@+id/live" android:text="●" android:textColor="#2E7D4F"
+          android:textSize="13sp"
+          android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+    </LinearLayout>
+
+    <!-- status card -->
+    <LinearLayout android:orientation="vertical" android:background="@drawable/card"
+        android:padding="16dp" android:layout_marginTop="14dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content">
+      <TextView android:text="VFS LAST UPDATED" android:textColor="#6B7686"
+          android:textSize="10sp" android:letterSpacing="0.12"
+          android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+      <TextView android:id="@+id/updated" android:text="—" android:textColor="#FF9A3C"
+          android:textSize="30sp" android:textStyle="bold" android:layout_marginTop="2dp"
+          android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+      <TextView android:id="@+id/updatedRaw" android:textColor="#6B7686" android:textSize="11sp"
+          android:fontFamily="monospace"
+          android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+      <View android:background="#232B36" android:layout_marginTop="12dp"
+          android:layout_width="match_parent" android:layout_height="1dp"/>
+      <LinearLayout android:orientation="horizontal" android:layout_marginTop="10dp"
+          android:layout_width="match_parent" android:layout_height="wrap_content">
+        <LinearLayout android:orientation="vertical" android:layout_weight="1"
+            android:layout_width="0dp" android:layout_height="wrap_content">
+          <TextView android:text="THIS APP CHECKED" android:textColor="#6B7686" android:textSize="9sp"
+              android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+          <TextView android:id="@+id/checked" android:text="—" android:textColor="#C9D3E0"
+              android:textSize="13sp" android:fontFamily="monospace"
+              android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        </LinearLayout>
+        <LinearLayout android:orientation="vertical" android:layout_weight="1"
+            android:layout_width="0dp" android:layout_height="wrap_content">
+          <TextView android:text="NEXT CHECK" android:textColor="#6B7686" android:textSize="9sp"
+              android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+          <TextView android:id="@+id/next" android:text="—" android:textColor="#C9D3E0"
+              android:textSize="13sp" android:fontFamily="monospace"
+              android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        </LinearLayout>
+      </LinearLayout>
+      <TextView android:id="@+id/error" android:textColor="#E5534B" android:textSize="11sp"
+          android:layout_marginTop="8dp" android:visibility="gone"
+          android:layout_width="match_parent" android:layout_height="wrap_content"/>
+    </LinearLayout>
+
+    <!-- open-slot banner -->
+    <LinearLayout android:id="@+id/openBanner" android:orientation="vertical" android:visibility="gone"
+        android:background="@drawable/pill_ok" android:padding="14dp" android:layout_marginTop="12dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content">
+      <TextView android:id="@+id/openTitle" android:textColor="#5BD98A" android:textSize="15sp"
+          android:textStyle="bold"
+          android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+      <TextView android:id="@+id/openBody" android:textColor="#C9D3E0" android:textSize="13sp"
+          android:fontFamily="monospace" android:layout_marginTop="4dp"
+          android:layout_width="match_parent" android:layout_height="wrap_content"/>
+    </LinearLayout>
+
+    <!-- tabs -->
+    <LinearLayout android:orientation="horizontal" android:layout_marginTop="16dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content">
+      <TextView android:id="@+id/tabList" android:text="Centres" android:gravity="center"
+          android:padding="10dp" android:background="@drawable/tab_on" android:textColor="#0B0E13"
+          android:textSize="13sp" android:textStyle="bold" android:layout_marginEnd="8dp"
           android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"/>
-      <Button android:id="@+id/refresh" android:text="Check now"
-          android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"/>
-      <Button android:id="@+id/test" android:text="Test alarm"
+      <TextView android:id="@+id/tabJson" android:text="Raw JSON" android:gravity="center"
+          android:padding="10dp" android:background="@drawable/tab_off" android:textColor="#8B97A8"
+          android:textSize="13sp" android:textStyle="bold"
           android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"/>
     </LinearLayout>
 
-    <TextView android:text="Checks every hour by itself, also after a reboot. Opening the app stops the alarm."
-        android:textColor="#55606E" android:textSize="11sp" android:layout_marginTop="14dp"
+    <!-- readable list -->
+    <LinearLayout android:id="@+id/list" android:orientation="vertical"
+        android:background="@drawable/card" android:padding="6dp" android:layout_marginTop="10dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+    <!-- raw json -->
+    <LinearLayout android:id="@+id/jsonBox" android:orientation="vertical" android:visibility="gone"
+        android:background="@drawable/card" android:padding="12dp" android:layout_marginTop="10dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content">
+      <HorizontalScrollView android:layout_width="match_parent" android:layout_height="wrap_content">
+        <TextView android:id="@+id/json" android:textColor="#9FB0C6" android:textSize="10sp"
+            android:fontFamily="monospace" android:textIsSelectable="true"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+      </HorizontalScrollView>
+      <TextView android:id="@+id/copy" android:text="Copy JSON" android:gravity="center"
+          android:padding="10dp" android:background="@drawable/btn" android:textColor="#C9D3E0"
+          android:textSize="12sp" android:layout_marginTop="10dp"
+          android:layout_width="match_parent" android:layout_height="wrap_content"/>
+    </LinearLayout>
+
+    <!-- settings -->
+    <LinearLayout android:orientation="vertical" android:background="@drawable/card"
+        android:padding="16dp" android:layout_marginTop="14dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content">
+      <TextView android:text="WHO TO ALERT WHEN A SLOT OPENS" android:textColor="#6B7686"
+          android:textSize="10sp" android:letterSpacing="0.08"
+          android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+      <TextView android:text="Number 1 — gets the call and an SMS" android:textColor="#8B97A8"
+          android:textSize="11sp" android:layout_marginTop="8dp"
+          android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+      <EditText android:id="@+id/phone" android:inputType="phone" android:hint="+91…"
+          android:textColor="#F0F3F8" android:textColorHint="#4A5462" android:textSize="15sp"
+          android:background="@drawable/field" android:padding="12dp" android:layout_marginTop="4dp"
+          android:layout_width="match_parent" android:layout_height="wrap_content"/>
+      <TextView android:text="Number 2 — gets an SMS (optional)" android:textColor="#8B97A8"
+          android:textSize="11sp" android:layout_marginTop="10dp"
+          android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+      <EditText android:id="@+id/phone2" android:inputType="phone" android:hint="+91…"
+          android:textColor="#F0F3F8" android:textColorHint="#4A5462" android:textSize="15sp"
+          android:background="@drawable/field" android:padding="12dp" android:layout_marginTop="4dp"
+          android:layout_width="match_parent" android:layout_height="wrap_content"/>
+      <LinearLayout android:orientation="horizontal" android:gravity="center_vertical"
+          android:layout_marginTop="10dp"
+          android:layout_width="match_parent" android:layout_height="wrap_content">
+        <CheckBox android:id="@+id/smsOn" android:checked="true" android:buttonTint="#FF7A1A"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <TextView android:text="Send an SMS as well as calling" android:textColor="#C9D3E0"
+            android:textSize="13sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+      </LinearLayout>
+      <LinearLayout android:orientation="horizontal" android:layout_marginTop="10dp"
+          android:layout_width="match_parent" android:layout_height="wrap_content">
+        <TextView android:id="@+id/save" android:text="Save" android:gravity="center"
+            android:padding="12dp" android:background="@drawable/btn" android:textColor="#C9D3E0"
+            android:textSize="13sp" android:layout_marginEnd="8dp"
+            android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/test" android:text="Test alarm" android:gravity="center"
+            android:padding="12dp" android:background="@drawable/btn" android:textColor="#C9D3E0"
+            android:textSize="13sp"
+            android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"/>
+      </LinearLayout>
+    </LinearLayout>
+
+    <TextView android:id="@+id/refresh" android:text="Check now" android:gravity="center"
+        android:padding="14dp" android:background="@drawable/btn_primary" android:textColor="#0B0E13"
+        android:textSize="15sp" android:textStyle="bold" android:layout_marginTop="14dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+    <TextView android:id="@+id/foot"
+        android:text="Checks itself every hour, timed to land just after VFS refreshes. Opening the app stops the alarm."
+        android:textColor="#4A5462" android:textSize="10sp" android:layout_marginTop="12dp"
+        android:layout_marginBottom="8dp" android:gravity="center"
         android:layout_width="match_parent" android:layout_height="wrap_content"/>
   </LinearLayout>
 </ScrollView>
