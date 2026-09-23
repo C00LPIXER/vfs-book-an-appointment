@@ -491,27 +491,35 @@ def rotate_loop(cfg: Config, once: bool) -> int:
             return 0
 
 
-def rotate_ip(cfg: Config, last_ip: str) -> str:
-    """Run the IP-rotation command (phone tethering / VPN CLI) and return the new public IP."""
+def rotate_ip(cfg: Config, last_ip: str, attempts: int = 3) -> str:
+    """Run the IP-rotation command (phone tethering / VPN CLI) and return the new public IP.
+    A carrier sometimes hands back the same address, so the toggle is repeated a few times before
+    giving up — each retry waits a little longer, which usually lands on a different pool member."""
     import subprocess
     r = cfg.ip_rotate
-    log.info("rotating IP: %s", r.command)
-    try:
-        res = subprocess.run(r.command, shell=True, capture_output=True, text=True, timeout=r.timeout_seconds)
-    except subprocess.TimeoutExpired:
-        raise ProxyError(f"IP rotation command timed out after {r.timeout_seconds}s")
-    if res.returncode != 0:
-        raise ProxyError(f"IP rotation command failed ({res.returncode}): {(res.stderr or res.stdout).strip()[-160:]}")
     ip = ""
-    for _ in range(12):          # the link needs a moment to come back
-        ip = _direct_ip(cfg.rotation.ip_check_url)
-        if ip:
+    for attempt in range(1, attempts + 1):
+        log.info("rotating IP (try %d/%d): %s", attempt, attempts, r.command)
+        try:
+            res = subprocess.run(r.command, shell=True, capture_output=True, text=True, timeout=r.timeout_seconds)
+        except subprocess.TimeoutExpired:
+            raise ProxyError(f"IP rotation command timed out after {r.timeout_seconds}s")
+        if res.returncode != 0:
+            raise ProxyError(f"IP rotation command failed ({res.returncode}): {(res.stderr or res.stdout).strip()[-160:]}")
+        ip = ""
+        for _ in range(12):          # the link needs a moment to come back
+            ip = _direct_ip(cfg.rotation.ip_check_url)
+            if ip:
+                break
+            time.sleep(5)
+        if not ip:
+            raise ProxyError("no internet after the IP rotation command (is the phone tethered?)")
+        if not (r.require_change and last_ip and ip == last_ip):
             break
-        time.sleep(5)
-    if not ip:
-        raise ProxyError("no internet after the IP rotation command (is the phone tethered?)")
+        log.warning("carrier handed back the same IP (%s) — toggling again", ip)
+        time.sleep(5 * attempt)
     if r.require_change and last_ip and ip == last_ip:
-        raise ProxyError(f"public IP did not change ({ip}) after the rotation command")
+        raise ProxyError(f"public IP is still {ip} after {attempts} toggles — the carrier is holding the address")
     log.info("new public IP: %s (was %s)", ip, last_ip or "?")
     log_event("control", f"IP rotated: {ip}" + (f" (was {last_ip})" if last_ip else ""), "info")
     return ip
