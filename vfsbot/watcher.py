@@ -758,11 +758,14 @@ class Watcher:
         if self.cfg.passport_auto_continue:
             log_event("upload", f"Passport selected for {self.account.name} ({f.name}) — pressing Continue", "warn",
                       screenshot=self.screenshot("passport_selected"))
-            btn = self.page.get_by_role("button", name=re.compile(r"continue|submit|next|proceed", re.I)).first
             try:
-                btn.wait_for(state="visible", timeout=15_000)
-                for _ in range(20):          # button enables once VFS has read the image
-                    if btn.is_enabled():
+                btn = self._continue_control()
+                btn.wait_for(state="visible", timeout=20_000)
+                for _ in range(20):          # it enables once VFS has read the image
+                    try:
+                        if btn.is_enabled():
+                            break
+                    except Exception:  # noqa: BLE001  (a link is always "enabled")
                         break
                     self.page.wait_for_timeout(1000)
                 human.nap(self.page, 800, 2500)
@@ -777,16 +780,38 @@ class Watcher:
             self.on_human_needed(f"First login of {self.account.name}: passport selected — press Continue in the bot's browser window")
         # wait for the step to be over (dashboard visible)
         deadline = time.monotonic() + self.cfg.passport_wait_minutes * 60
+        tries = 0
         while time.monotonic() < deadline:
             if self._is_logged_in() or "/dashboard" in self.url or not self._on_passport_upload():
                 self.page.wait_for_timeout(1500)
                 if not self._on_passport_upload():
                     log_event("upload", f"Passport step done for {self.account.name}", "info")
                     return
+            if self.cfg.passport_auto_continue and tries < 4:
+                tries += 1
+                try:                      # VFS re-renders the panel after reading the image
+                    human.click(self.page, self._continue_control(), timeout=4000)
+                except Exception:  # noqa: BLE001
+                    pass
+            self.on_status(f"passport step — waiting for Continue ({int(deadline - time.monotonic())}s left)")
             self.page.wait_for_timeout(3000)
         log_event("upload", f"Passport step for {self.account.name} still waiting for Continue — giving up this sweep", "warn",
                   screenshot=self.screenshot("passport_timeout"))
         raise PassportPending(self.url)
+
+    def _continue_control(self):
+        """VFS renders Continue sometimes as a <button>, sometimes as a link/span — take whichever
+        is on the page."""
+        pat = re.compile(r"^\s*(continue|submit|next|proceed)\s*$", re.I)
+        for loc in (self.page.get_by_role("button", name=pat),
+                    self.page.get_by_role("link", name=pat),
+                    self.page.locator("a, button, span[role=button], div[role=button]").filter(has_text=pat)):
+            try:
+                if loc.count():
+                    return loc.first
+            except Exception:  # noqa: BLE001
+                continue
+        return self.page.get_by_text(pat).first
 
     def on_status(self, what: str) -> None:
         """Hook: the CLI replaces this to show what the login is waiting for on the dashboard."""
