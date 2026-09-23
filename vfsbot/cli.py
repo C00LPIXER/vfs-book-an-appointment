@@ -499,9 +499,10 @@ def rotate_ip(cfg: Config, last_ip: str, attempts: int = 3) -> str:
     r = cfg.ip_rotate
     ip = ""
     for attempt in range(1, attempts + 1):
-        log.info("rotating IP (try %d/%d): %s", attempt, attempts, r.command)
+        cmd = r.deep_command if (attempt == attempts and r.deep_command) else r.command
+        log.info("rotating IP (try %d/%d): %s", attempt, attempts, cmd)
         try:
-            res = subprocess.run(r.command, shell=True, capture_output=True, text=True, timeout=r.timeout_seconds)
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=r.timeout_seconds + 40)
         except subprocess.TimeoutExpired:
             raise ProxyError(f"IP rotation command timed out after {r.timeout_seconds}s")
         if res.returncode != 0:
@@ -513,12 +514,24 @@ def rotate_ip(cfg: Config, last_ip: str, attempts: int = 3) -> str:
                 break
             time.sleep(5)
         if not ip:
+            if attempt < attempts:
+                log.warning("no connection after the toggle — trying again")
+                continue
+            cur = _direct_ip(cfg.rotation.ip_check_url)   # maybe the office line came back instead
+            if r.fallback_to_direct and cur:
+                log.warning("the phone gave no connection — carrying on with %s", cur)
+                log_event("control", f"Phone rotation failed — continuing on {cur}", "warn")
+                return cur
             raise ProxyError("no internet after the IP rotation command (is the phone tethered?)")
         if not (r.require_change and last_ip and ip == last_ip):
             break
         log.warning("carrier handed back the same IP (%s) — toggling again", ip)
         time.sleep(5 * attempt)
     if r.require_change and last_ip and ip == last_ip:
+        if r.fallback_to_direct:
+            log.warning("carrier kept the same IP (%s) after %d toggles — carrying on with it", ip, attempts)
+            log_event("control", f"IP rotation could not get a new address ({ip}) — continuing on the current line", "warn")
+            return ip
         raise ProxyError(f"public IP is still {ip} after {attempts} toggles — the carrier is holding the address")
     log.info("new public IP: %s (was %s)", ip, last_ip or "?")
     log_event("control", f"IP rotated: {ip}" + (f" (was {last_ip})" if last_ip else ""), "info")

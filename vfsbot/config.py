@@ -126,6 +126,11 @@ class IpRotateConfig(BaseModel):
                     " && adb shell svc data enable && sleep 12")
     require_change: bool = True      # refuse to log in if the IP did not change from the last login
     timeout_seconds: int = 90
+    # Carriers sometimes hand back the same address; the last attempt keeps the radio down longer,
+    # which almost always lands on a different member of the pool.
+    deep_command: str = ("adb shell svc wifi disable && adb shell svc data disable && sleep 25"
+                         " && adb shell svc data enable && sleep 20")
+    fallback_to_direct: bool = True  # if the phone cannot give a new IP, carry on with the line we have
 
 
 class Config(BaseModel):
