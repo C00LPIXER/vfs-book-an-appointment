@@ -111,6 +111,7 @@ rotation:
   verify_ip: true
   require_proxy: false
   ip_check_url: https://api.ipify.org?format=json
+  round_gap_minutes: 60
 proxy_auto:
   enabled: false
   provider: digitalocean

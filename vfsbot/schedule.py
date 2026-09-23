@@ -60,7 +60,9 @@ def next_delay(cfg: Config) -> float:
     """Public mode polls a plain API often; login mode runs one account per round and then lets
     that account rest, so the gap between rounds is simply `rotation.account_rest_hours`."""
     if cfg.mode == "login" and cfg.rotation.enabled and not in_burst_window(cfg):
-        return max(60.0, cfg.rotation.account_rest_hours * 3600.0)
+        # one round per gap; whether an account is actually free is decided by account_rest_hours,
+        # and the loop waits longer by itself when every account is still resting
+        return max(60.0, cfg.rotation.round_gap_minutes * 60.0)
     if in_burst_window(cfg):
         base, jitter = cfg.burst.interval_seconds, min(cfg.jitter_seconds, cfg.burst.interval_seconds // 3)
     elif cfg.mode == "public":
