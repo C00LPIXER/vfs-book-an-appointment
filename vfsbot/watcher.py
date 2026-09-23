@@ -170,6 +170,11 @@ class Blocked(Exception):
     browsers or after too many requests. Nothing to do but back off / use a visible browser."""
 
 
+class SiteThrottled(Exception):
+    """VFS is rate-limiting this IP (429 on its configuration endpoints, the SPA lands on
+    /page-not-found). Nothing wrong with the account — wait, and give every account a rest."""
+
+
 class AccountRestricted(Blocked):
     """VFS restricted this specific account ("Access Restricted for User ID"). Nothing to wait for —
     the account must be switched off and the next one used."""
@@ -247,6 +252,7 @@ class Watcher:
         self.logged_in = False
         self.rate_limited = False
         self.upload_throttled = False
+        self.site_throttled = False
         self._centre_hint = ""
         self.partial_results: list[SlotResult] = []
         self._pw = None
@@ -394,6 +400,8 @@ class Watcher:
                 body = ""
             log.warning("lift-api %s on %s: %s", resp.status, path, body)
             log_event("check" if resp.status in (409, 429) else "error", f"VFS API {resp.status} on {path}: {body}", "warn", {"status": resp.status})
+        if resp.status == 429 and "lift-api" in url and "CheckIsSlotAvailable" not in url:
+            self.site_throttled = True        # VFS is throttling this IP, not this account
         if "UploadApplicantDocument" in url and resp.status in (409, 429):
             self.upload_throttled = True      # VFS refuses more document uploads for now
         if "CheckIsSlotAvailable" in url and resp.status == 429:
@@ -593,6 +601,10 @@ class Watcher:
             log.warning("VFS page is blank — reloading once")
             self.page.reload(wait_until="domcontentloaded")
             self._wait_for_spa()
+        if self.site_throttled or "page-not-found" in self.url:
+            self._raise_if_blocked()          # an account restriction says so on the page itself
+            if self.site_throttled:
+                raise SiteThrottled(f"VFS is rate-limiting this IP ({self.public_ip or 'no proxy'}) — it bounced to {self.url.rsplit('/', 1)[-1]}")
         self._dismiss_cookie_banner()
         human.dwell(self.page)
         if not self._on_login_page():

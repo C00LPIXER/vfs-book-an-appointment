@@ -14,7 +14,7 @@ from .events import log_event
 from .notify import Notifier
 from .schedule import in_burst_window, in_run_window, next_delay
 from .accounts import AccountPool
-from .watcher import (OTP_FILE, AccountRestricted, Blocked, CoolOff, LoginRequired, NoDisplay, OtpRequired, PassportPending,
+from .watcher import (OTP_FILE, AccountRestricted, Blocked, CoolOff, SiteThrottled, LoginRequired, NoDisplay, OtpRequired, PassportPending,
                       ProfileInUse, ProxyError, SlotResult, Watcher, short_centre, summarize)
 
 log = logging.getLogger("vfsbot")
@@ -354,6 +354,18 @@ def rotate_loop(cfg: Config, once: bool) -> int:
                 log_event("error", f"Proxy problem for {acct.name}: {e}", "error")
                 _set(st, status="error", task=f"proxy problem ({acct.name}) — trying next account", accounts=pool.status())
                 delay = 60.0
+        except SiteThrottled as e:
+            # the IP is throttled, not the account: rest everything, do not switch anyone off
+            mins = cfg.rotation.throttle_backoff_minutes
+            log.error("%s — pausing all accounts for %d min", e, mins)
+            log_event("blocked", f"{e} — pausing logins for {mins} min", "error", screenshot=None)
+            if st.get("last_throttle_notice") != datetime.now().strftime("%Y-%m-%d %H"):
+                notifier.notice(f"\u23f8\ufe0f VFS bot: {e}.\nAll accounts pause for {mins} min. "
+                                f"If this keeps happening the machine needs a different IP per account.")
+                _set(st, last_throttle_notice=datetime.now().strftime("%Y-%m-%d %H"))
+            _set(st, status="cooling", task=f"VFS is rate-limiting this IP — all accounts pause for {mins} min",
+                 accounts=pool.status())
+            delay = mins * 60.0
         except (CoolOff, Blocked) as e:
             if acct is None:
                 raise

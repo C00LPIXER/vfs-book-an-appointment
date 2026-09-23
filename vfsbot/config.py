@@ -94,6 +94,7 @@ class RotationConfig(BaseModel):
     account_rest_hours: float = 1.0    # after an account finishes its round it rests this long
     retry_minutes: int = 5             # short wait before the next account after a transient failure
     recheck_blocked_hours: float = 6.0 # a switched-off (blocked) account is tried again after this
+    throttle_backoff_minutes: int = 45 # VFS rate-limits the whole IP -> every account waits this long
     verify_ip: bool = True             # look up the public IP through the proxy before logging in
     require_proxy: bool = False        # refuse to log in when an account has no proxy configured
     ip_check_url: str = "https://api.ipify.org?format=json"
