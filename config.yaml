@@ -117,10 +117,14 @@ proxy_auto:
   plan: ''
 ip_rotate:
   enabled: false
-  command: adb shell svc data disable && sleep 4 && adb shell svc data enable && sleep
-    10
+  command: $HOME/android/sdk/platform-tools/adb shell svc wifi disable && $HOME/android/sdk/platform-tools/adb
+    shell svc data disable && sleep 4 && $HOME/android/sdk/platform-tools/adb shell
+    svc data enable && sleep 12
   require_change: true
   timeout_seconds: 90
+  deep_command: $HOME/android/sdk/platform-tools/adb shell svc wifi disable && $HOME/android/sdk/platform-tools/adb
+    shell svc data disable && sleep 25 && $HOME/android/sdk/platform-tools/adb shell
+    svc data enable && sleep 20
 passport_file: documents/passport_bio.jpg
 passport_auto_continue: true
 passport_wait_minutes: 10

@@ -12,7 +12,7 @@ from pathlib import Path
 from .config import Config
 from .events import log_event
 from .notify import Notifier
-from .schedule import in_burst_window, in_run_window, next_delay
+from .schedule import in_burst_window, in_run_window, next_delay, public_delay
 from .accounts import AccountPool
 from .watcher import (OTP_FILE, AccountRestricted, Blocked, CoolOff, SiteThrottled, LoginRequired, NoDisplay, OtpRequired, PassportPending,
                       ProfileInUse, ProxyError, SlotResult, Watcher, short_centre, summarize)
@@ -817,6 +817,11 @@ def watch_loop(w: Watcher, cfg: Config, once: bool) -> int:
             return 0
         if PAUSE_FILE.exists() or not in_run_window(cfg)[0]:
             delay = 30.0
+        elif cfg.mode == "public" and not in_burst_window(cfg):
+            # follow VFS's own refresh cycle rather than a fixed interval
+            age = st.get("vfs_updated_value")
+            unit = {"S": 0, "M": 1, "H": 60, "D": 1440}.get((st.get("vfs_updated_type") or "M").upper(), 1)
+            delay = public_delay(cfg, age * unit if isinstance(age, (int, float)) else None)
         elif st.get("status") == "needs_human":
             delay = 60.0        # retry login quickly once someone has helped
         else:
