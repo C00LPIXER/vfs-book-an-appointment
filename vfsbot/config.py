@@ -147,6 +147,9 @@ class Config(BaseModel):
     jitter_seconds: int = 45
     public_interval_seconds: int = 300   # public (no-login) mode: refresh the earliest-date data this often
     public_jitter_seconds: int = 60
+    # Send the public poll through a proxy too (e.g. socks5://127.0.0.1:18000, an SSH tunnel to your
+    # own VM) so VFS rate-limiting this office IP cannot blind the dashboard. "" = this machine's IP.
+    public_proxy: str = ""
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     burst: BurstConfig = Field(default_factory=BurstConfig)
     notify: NotifyConfig = Field(default_factory=NotifyConfig)

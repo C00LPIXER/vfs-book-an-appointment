@@ -313,10 +313,13 @@ class PublicApiWatcher:
     def _fetch_direct(self) -> dict:
         from curl_cffi import requests as cr
         payload = {"missionCode": "bgr", "countryCode": "ind", "cultureCode": "en-US"}
+        proxy = (self.cfg.public_proxy or "").strip()
+        proxies = {"http": proxy, "https": proxy} if proxy else None
         last = ""
         for imp in self.IMPERSONATE:
             try:
-                r = cr.post(ENDPOINT, json=payload, headers=self._headers(), impersonate=imp, timeout=30)
+                r = cr.post(ENDPOINT, json=payload, headers=self._headers(), impersonate=imp,
+                            proxies=proxies, timeout=30)
             except Exception as e:  # noqa: BLE001  (network hiccup, TLS profile unavailable, ...)
                 last = f"{type(e).__name__}: {e}"
                 continue
@@ -344,6 +347,9 @@ class PublicApiWatcher:
             if "429" in str(e):
                 # the whole IP is rate-limited; a browser would only add to it
                 raise Blocked(f"VFS is rate-limiting this IP (public endpoint): {str(e)[:80]}") from e
+            if (self.cfg.public_proxy or "").strip():
+                # a proxy is configured on purpose — never fall back to this machine's own IP
+                raise Blocked(f"public poll failed through the proxy: {str(e)[:100]}") from e
             log.info("direct fetch blocked (%s)", str(e)[:80])
             data = self._fetch_browser()
         self.last_updated = data.get("lastUpdatedOn", "")
