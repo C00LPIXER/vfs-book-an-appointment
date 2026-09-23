@@ -252,7 +252,7 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
         <div style="flex:1"><label>Only alert for first N centres (0 = all)</label><input type="number" id="n_alert_top_n" min="0" max="15"></div></div>
       <div class="check" style="margin-top:8px"><input type="checkbox" id="c_sweep_all"><span>One rotation = one account checks <b>every</b> ticked centre (signs in again when VFS's per-session quota runs out); the next rotation uses the next account</span></div>
       <div class="row"><div style="flex:1"><label>Centres per login (0 = until the session ends)</label><input type="number" id="c_login_centres_per_session" min="0" max="15"></div>
-        <div style="flex:1"><label>Max logins per rotation</label><input type="number" id="c_max_logins_per_sweep" min="1" max="6"></div>
+        <div style="flex:1"><label>Max logins per round (one account)</label><input type="number" id="c_max_logins_per_sweep" min="1" max="6"></div>
         <div style="flex:1"><label>Gap between those logins (s)</label><input type="number" id="c_relogin_gap_seconds" min="30" max="900"></div></div>
     </div>
 
@@ -279,14 +279,13 @@ footer{padding:20px 16px;color:var(--dim);font-size:12px;text-align:center}
     </div>
 
     <div class="card"><h3>Login watcher — account rotation</h3>
-      <div style="color:var(--muted);font-size:13px">Each sweep uses a different account + proxy IP and closes the browser afterwards. If Cloudflare's widget stays blank (cool-off) or a login stalls, that account is benched (cool-off doubles on every consecutive failure, max 24 h) and the next one is tried after the retry delay.</div>
+      <div style="color:var(--muted);font-size:13px">One account per round: it signs in, checks the centres, signs in again when VFS ends the session, and keeps going until every ticked centre is done. Then that account <b>rests</b> and the next account does the same — with 4 accounts and a 1 h rest each gets ~4 h off. If VFS/Cloudflare blocks an account it is <b>switched off</b> with the reason (dashboard + WhatsApp), the next account takes over at once, and the switched-off one is tested again later and switched back on if it works.</div>
       <div class="check" style="margin-top:8px"><input type="checkbox" id="r_enabled"><span>Rotate accounts (off = single account, session kept open)</span></div>
       <div class="check"><input type="checkbox" id="r_verify_ip"><span>Verify the public IP through the proxy before every login</span></div>
       <div class="check"><input type="checkbox" id="r_require_proxy"><span>Refuse to log in with an account that has no proxy</span></div>
       <div class="row"><div style="flex:1"><label>Login/OTP wait (min)</label><input type="number" id="r_login_wait_minutes" min="1" max="15"></div>
-        <div style="flex:1"><label>Cool-off (hours)</label><input type="number" id="r_cooloff_hours" min="0.5" step="0.5"></div>
-        <div style="flex:1"><label>Retry next account after (min)</label><input type="number" id="r_retry_minutes" min="1"></div>
-        <div style="flex:1"><label>Rest per account (h) — not used again within this</label><input type="number" id="r_account_rest_hours" min="0" step="0.5"></div></div>
+        <div style="flex:1"><label>Rest after a round (hours)</label><input type="number" id="r_account_rest_hours" min="0" step="0.5"></div>
+        <div style="flex:1"><label>Retry a switched-off account after (h)</label><input type="number" id="r_recheck_blocked_hours" min="1" step="1"></div></div>
       <h3 style="margin-top:16px">Passport bio page</h3>
       <label>PNG/JPG/PDF, ≤ 2 MB — selected automatically on each account's first login</label>
       <div class="row"><input type="file" id="passportFile" accept=".jpg,.jpeg,.png,.pdf"><button class="btn" id="passportBtn">Upload</button></div>
@@ -452,7 +451,8 @@ function acctStatusLine(a) {
   const bits = [];
   bits.push(s.logins ? `${s.logins} login(s), last ${fmt(s.last_login_at)}` : 'never logged in');
   if (s.last_ip) bits.push('ip ' + s.last_ip);
-  if (s.cooldown_until) bits.push(`<span class="tag err">cool-off until ${fmt(s.cooldown_until)}</span> ${esc(s.last_error || '')} <button class="btn acc-clear" data-clear="${esc(a.email)}">clear</button>`);
+  if (s.blocked_at) bits.push(`<span class="tag err">switched off ${fmt(s.blocked_at)}</span> ${esc(s.blocked_reason || '')} <button class="btn acc-clear" data-clear="${esc(a.email)}">switch back on</button>`);
+  else if (s.cooldown_until) bits.push(`<span class="tag err">paused until ${fmt(s.cooldown_until)}</span> ${esc(s.last_error || '')} <button class="btn acc-clear" data-clear="${esc(a.email)}">switch back on</button>`);
   if (s.imap_error) bits.push(`<span class="tag err" title="${esc(s.imap_error)}">OTP inbox login failing</span>`);
   bits.push(`<button class="btn acc-testimap" data-email="${esc(a.email)}">Test IMAP (auto-OTP)</button> <span class="acc-imapres"></span>`);
   bits.push(`<button class="btn acc-testip" data-email="${esc(a.email)}">Test IP through proxy</button> <span class="acc-ipres"></span>`);
@@ -570,7 +570,7 @@ async function loadConfig() {
   $('#pp_auto').checked = !!CFG.passport_auto_continue; $('#pp_wait').value = CFG.passport_wait_minutes ?? 10;
   const r = CFG.rotation || {};
   $('#r_enabled').checked = r.enabled !== false; $('#r_verify_ip').checked = r.verify_ip !== false; $('#r_require_proxy').checked = !!r.require_proxy;
-  $('#r_account_rest_hours').value = r.account_rest_hours ?? 2; $('#r_login_wait_minutes').value = r.login_wait_minutes ?? 3; $('#r_cooloff_hours').value = r.cooloff_hours ?? 2; $('#r_retry_minutes').value = r.retry_minutes ?? 5;
+  $('#r_account_rest_hours').value = r.account_rest_hours ?? 1; $('#r_login_wait_minutes').value = r.login_wait_minutes ?? 3; $('#r_recheck_blocked_hours').value = r.recheck_blocked_hours ?? 6;
   await loadAccounts();
   const pi = await api('/api/passport'); $('#passportInfo').textContent = pi.exists ? `current: ${pi.path} (${Math.round(pi.size / 1024)} KB)` : 'no passport file uploaded yet';
 }
@@ -586,7 +586,7 @@ $('#saveBtn').onclick = async () => {
     CFG.whatsapp_web = { ...CFG.whatsapp_web, enabled: $('#w_enabled').checked, stop_all_on_first_ack: $('#w_stop_all_on_first_ack').checked, contacts: WA.filter(c => c.chat.trim()), chat: '', ack_keyword: $('#w_ack_keyword').value, call_attempts: +$('#w_call_attempts').value, call_interval_seconds: +$('#w_call_interval_seconds').value, ring_seconds: +$('#w_ring_seconds').value };
     CFG.proxy_auto = { ...CFG.proxy_auto, enabled: $('#p_enabled').checked, provider: $('#p_provider').value, region: $('#p_region').value.trim(), plan: $('#p_plan').value.trim() };
     CFG.passport_auto_continue = $('#pp_auto').checked; CFG.passport_wait_minutes = +$('#pp_wait').value || 10;
-    CFG.rotation = { ...CFG.rotation, enabled: $('#r_enabled').checked, verify_ip: $('#r_verify_ip').checked, require_proxy: $('#r_require_proxy').checked, login_wait_minutes: +$('#r_login_wait_minutes').value, account_rest_hours: +$('#r_account_rest_hours').value, cooloff_hours: +$('#r_cooloff_hours').value, retry_minutes: +$('#r_retry_minutes').value };
+    CFG.rotation = { ...CFG.rotation, enabled: $('#r_enabled').checked, verify_ip: $('#r_verify_ip').checked, require_proxy: $('#r_require_proxy').checked, login_wait_minutes: +$('#r_login_wait_minutes').value, account_rest_hours: +$('#r_account_rest_hours').value, recheck_blocked_hours: +$('#r_recheck_blocked_hours').value };
     await api('/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: CFG }) });
     toast('Settings saved');
   } catch (e) { toast('Save failed: ' + e.message); }

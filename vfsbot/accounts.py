@@ -187,6 +187,53 @@ class AccountPool:
         r.pop("last_error", None)
         save_state(self.state)
 
+    def block(self, a: Account, reason: str) -> None:
+        """VFS/Cloudflare refused this account: switch it off (accounts.json) and record why.
+        It is tried again automatically after `recheck_blocked_hours` (see `due_for_recheck`)."""
+        r = self._rec(a.email)
+        r["blocked_at"] = _now().isoformat(timespec="seconds")
+        r["blocked_reason"] = reason[:200]
+        r.pop("cooldown_until", None)
+        save_state(self.state)
+        raw = load_raw_accounts()
+        for d in raw:
+            if d.get("email") == a.email:
+                d["enabled"] = False
+        save_raw_accounts(raw)
+        a.enabled = False
+
+    def unblock(self, email: str, why: str = "") -> None:
+        r = self._rec(email)
+        r.pop("blocked_at", None)
+        r.pop("blocked_reason", None)
+        r.pop("cooldown_until", None)
+        r["fails"] = 0
+        if why:
+            r["unblocked"] = f"{_now():%Y-%m-%d %H:%M} {why}"[:120]
+        save_state(self.state)
+        raw = load_raw_accounts()
+        for d in raw:
+            if d.get("email") == email:
+                d["enabled"] = True
+        save_raw_accounts(raw)
+        for a in self.accounts:
+            if a.email == email:
+                a.enabled = True
+
+    def blocked(self) -> list[Account]:
+        return [a for a in self.accounts if not a.enabled and self._rec(a.email).get("blocked_at")]
+
+    def due_for_recheck(self, hours: float) -> Account | None:
+        """A switched-off account whose block is old enough to test again."""
+        for a in self.blocked():
+            at = self._rec(a.email).get("blocked_at")
+            try:
+                if datetime.fromisoformat(at) + timedelta(hours=hours) <= _now():
+                    return a
+            except Exception:  # noqa: BLE001
+                continue
+        return None
+
     def mark_cooloff(self, a: Account, hours: float, reason: str) -> datetime:
         r = self._rec(a.email)
         r["fails"] = int(r.get("fails", 0)) + 1
@@ -221,6 +268,7 @@ class AccountPool:
                 "last_used_at": r.get("last_used_at"), "last_login_at": r.get("last_login_at"),
                 "last_ip": r.get("last_ip"), "logins": r.get("logins", 0), "fails": r.get("fails", 0),
                 "cooldown_until": cu.isoformat(timespec="seconds") if cu else None,
+                "blocked_at": r.get("blocked_at"), "blocked_reason": r.get("blocked_reason"),
                 "resting_until": (lambda r: r.isoformat(timespec="seconds") if r else None)(self.resting_until(a)),
                 "imap_error": r.get("imap_error"),
                 "last_error": r.get("last_error"),

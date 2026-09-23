@@ -531,9 +531,11 @@ def proxies_destroy(body: dict):
 
 @app.post("/api/accounts/clear-cooloff")
 def clear_cooloff(body: dict):
+    """Switch an account back on (clears a block / cool-off recorded by the watcher)."""
+    email = (body.get("email") or "").strip()
     pool = AccountPool()
-    pool.clear_cooloff((body.get("email") or "").strip())
-    events.log_event("control", f"Cool-off cleared for {body.get('email')}", "info")
+    pool.unblock(email, "switched on from the dashboard")
+    events.log_event("control", f"{email} switched back on from the dashboard", "info")
     return {"ok": True}
 
 

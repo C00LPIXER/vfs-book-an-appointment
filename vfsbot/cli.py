@@ -248,9 +248,15 @@ def cmd_watch(cfg: Config, once: bool) -> int:
 
 
 def rotate_loop(cfg: Config, once: bool) -> int:
-    """Login mode with account rotation: every sweep opens a fresh browser for the least recently
-    used account (its own proxy/IP + profile), logs in, checks all centres, closes the browser.
-    Accounts whose login stalls (Cloudflare cool-off) or gets blocked are benched for a while."""
+    """One account per round, in turn:
+
+        log in -> check centres -> session ends -> log in again (SAME account) -> ... until every
+        centre is checked -> alert if a slot turned up -> that account rests `account_rest_hours`
+        -> the next account does exactly the same.
+
+    If VFS/Cloudflare blocks an account it is switched off (with the reason, on the dashboard and
+    over WhatsApp) and the next account takes over immediately. A switched-off account is tried
+    again by itself after `recheck_blocked_hours`, and switched back on if it can log in."""
     notifier = Notifier(cfg.notify)
     st = _load_state()
     consecutive_errors = 0
@@ -306,15 +312,30 @@ def rotate_loop(cfg: Config, once: bool) -> int:
                             log_event("error", f"Proxy provisioning failed for {email}: {e}", "error")
                     pool = AccountPool()   # reload: proxies were assigned
                 acct = pool.next(exclude=st.get("last_account_email", ""))
+                retrying_blocked = False
+                if acct is None:
+                    # nobody free: is a switched-off account old enough to test again?
+                    acct = pool.due_for_recheck(cfg.rotation.recheck_blocked_hours)
+                    if acct is not None:
+                        retrying_blocked = True
+                        log.info("testing switched-off account %s again", acct.name)
+                        _set(st, status="running", task=f"testing switched-off account {acct.name} again")
                 if acct is None:
                     free_at = pool.next_free_at()
                     when = free_at.strftime("%I:%M %p").lstrip("0") if free_at else ""
-                    _set(st, status="cooling", task=("every account is resting or cooling off" + (f" — next ready at {when}" if when else "")),
-                         accounts=pool.status(), next_run_at=free_at.isoformat(timespec="seconds") if free_at else None)
+                    blocked = [a.name for a in pool.blocked()]
+                    task = ("every account is resting" + (f" — next ready at {when}" if when else "")) if not blocked or pool.available() \
+                        else f"all accounts switched off ({', '.join(blocked)}) — retrying them in a while"
+                    _set(st, status="cooling", task=task, accounts=pool.status(),
+                         next_run_at=free_at.isoformat(timespec="seconds") if free_at else None)
                     delay = max(60.0, min(cfg.rotation.retry_minutes * 60.0,
                                           (free_at - datetime.now()).total_seconds() + 5 if free_at else 60.0))
                 else:
                     _sweep_account(acct, pool, cfg, st, notifier, direct_ip)
+                    if retrying_blocked:
+                        pool.unblock(acct.email, "logged in again")
+                        log_event("login", f"{acct.name} works again — switched back on", "info")
+                        notifier.notice(f"\u2705 VFS bot: {acct.name} is working again and is back in the rotation.")
                     consecutive_errors = 0
                     _set(st, accounts=pool.status())
         except ProxyError as e:
@@ -328,31 +349,26 @@ def rotate_loop(cfg: Config, once: bool) -> int:
                 _set(st, status="error", task=f"IP rotation problem — {str(e)[:100]}", accounts=pool.status())
                 delay = 120.0
             else:
-                # the proxy is dead or leaking — bench this account briefly, move on quickly
-                until = pool.mark_cooloff(acct, 1.0, f"proxy: {e}")
-                log.error("proxy problem for %s: %s — benched until %s", acct.name, e, until.strftime("%H:%M"))
-                log_event("error", f"Proxy problem for {acct.name}: {e}", "error", {"until": until.isoformat()})
+                # the account's proxy is dead or leaking — nothing to do with VFS; try the next account
+                log.error("proxy problem for %s: %s — trying the next account", acct.name, e)
+                log_event("error", f"Proxy problem for {acct.name}: {e}", "error")
                 _set(st, status="error", task=f"proxy problem ({acct.name}) — trying next account", accounts=pool.status())
                 delay = 60.0
-        except CoolOff as e:
+        except (CoolOff, Blocked) as e:
             if acct is None:
                 raise
-            until = pool.mark_cooloff(acct, cfg.rotation.cooloff_hours, str(e))
-            log.error("COOL-OFF for %s: %s — benched until %s", acct.name, e, until.strftime("%H:%M"))
-            _set(st, status="cooling", task=f"{acct.name} in Cloudflare cool-off — next account in {cfg.rotation.retry_minutes} min",
-                 accounts=pool.status())
-            delay = cfg.rotation.retry_minutes * 60.0
-        except Blocked as e:
-            if acct is None:
-                raise
-            until = pool.mark_cooloff(acct, cfg.rotation.cooloff_hours, f"blocked: {e}")
-            consecutive_errors += 1
-            log.error("BLOCKED for %s: %s — benched until %s", acct.name, e, until.strftime("%H:%M"))
-            if consecutive_errors in (1, 5):
-                notifier.error(f"blocked by Cloudflare/WAF as {acct.name} ({e}); rotating")
-            _set(st, status="blocked", task=f"{acct.name} blocked — next account in {cfg.rotation.retry_minutes} min",
-                 accounts=pool.status())
-            delay = cfg.rotation.retry_minutes * 60.0
+            reason = ("Cloudflare will not let this account sign in (the check stays blank)"
+                      if isinstance(e, CoolOff) else f"VFS/Cloudflare blocked this account: {e}")
+            pool.block(acct, reason)
+            log.error("%s switched OFF — %s", acct.name, reason)
+            log_event("blocked", f"{acct.name} switched off — {reason}", "error", {"account": acct.email})
+            notifier.notice(f"\u26d4 VFS bot: account {acct.name} switched off.\nReason: {reason}\n"
+                            f"The next account takes over now; {acct.name} is tested again in "
+                            f"{cfg.rotation.recheck_blocked_hours:.0f} h.")
+            left = [a.name for a in pool.available()]
+            _set(st, status="running", task=f"{acct.name} switched off ({reason[:60]}) — next account now" if left
+                 else f"{acct.name} switched off — no account left", accounts=pool.status())
+            delay = 30.0 if left else cfg.rotation.retry_minutes * 60.0
         except NoDisplay as e:
             log.error("%s", e)
             log_event("error", f"Cannot open a browser: {e}", "error")
@@ -374,14 +390,8 @@ def rotate_loop(cfg: Config, once: bool) -> int:
             if acct is None:
                 raise
             # not a Cloudflare problem — just log in again next round (no cool-off)
-            if getattr(e, "after_login", False):
-                # VFS's per-session quota (~7 slot checks, rolling window) ran out: the partial results
-                # were kept, the cursor moved on — wait the normal interval, don't hammer the quota
-                what = "VFS session ended during the sweep (quota spent)"
-                delay = next_delay(cfg)
-            else:
-                what = "OTP never arrived" if isinstance(e, OtpRequired) else "login did not complete"
-                delay = cfg.rotation.retry_minutes * 60.0
+            what = "OTP never arrived" if isinstance(e, OtpRequired) else "login did not complete"
+            delay = cfg.rotation.retry_minutes * 60.0
             log.warning("%s (%s) — next sweep in %.0f min", what, acct.name, delay / 60)
             log_event("login", f"{what} ({acct.name}) — next sweep in {delay / 60:.0f} min", "warn")
             _set(st, status="running", task=f"{what} ({acct.name}) — next sweep in {delay / 60:.0f} min", accounts=pool.status())
@@ -408,7 +418,7 @@ def rotate_loop(cfg: Config, once: bool) -> int:
 
         if once:
             return 0
-        log.info("next sweep in %.0fs", delay)
+        log.info("next login in %.0f min", delay / 60)
         try:
             _sleep_keepalive(None, delay, st)
         except KeyboardInterrupt:

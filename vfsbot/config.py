@@ -90,10 +90,10 @@ class RotationConfig(BaseModel):
     """Login mode: sign in with a different account (own proxy/IP + browser profile) on every sweep,
     then close the browser. Accounts are managed on the dashboard (data/accounts.json)."""
     enabled: bool = True
-    login_wait_minutes: int = 3        # give up on Cloudflare/OTP after this and move to the next account
-    cooloff_hours: float = 2.0         # base cool-off for an account whose login stalled/blocked (doubles per fail)
-    account_rest_hours: float = 2.0    # an account is not used again until this long after its last use
-    retry_minutes: int = 5             # wait this long before trying the next account after a failure
+    login_wait_minutes: int = 3        # give up on Cloudflare/OTP after this and move on
+    account_rest_hours: float = 1.0    # after an account finishes its round it rests this long
+    retry_minutes: int = 5             # short wait before the next account after a transient failure
+    recheck_blocked_hours: float = 6.0 # a switched-off (blocked) account is tried again after this
     verify_ip: bool = True             # look up the public IP through the proxy before logging in
     require_proxy: bool = False        # refuse to log in when an account has no proxy configured
     ip_check_url: str = "https://api.ipify.org?format=json"
