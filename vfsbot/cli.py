@@ -14,7 +14,7 @@ from .events import log_event
 from .notify import Notifier
 from .schedule import in_burst_window, in_run_window, next_delay
 from .accounts import AccountPool
-from .watcher import (OTP_FILE, Blocked, CoolOff, LoginRequired, NoDisplay, OtpRequired, PassportPending,
+from .watcher import (OTP_FILE, AccountRestricted, Blocked, CoolOff, LoginRequired, NoDisplay, OtpRequired, PassportPending,
                       ProfileInUse, ProxyError, SlotResult, Watcher, short_centre, summarize)
 
 log = logging.getLogger("vfsbot")
