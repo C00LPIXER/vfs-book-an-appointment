@@ -129,6 +129,8 @@ def _sleep_keepalive(w: Watcher | None, seconds: float, st: dict) -> None:
             return
         if REFRESH_FILE.exists():
             REFRESH_FILE.unlink(missing_ok=True)
+            # remember it: the trigger runs after this wait and the file is already gone by then
+            _set(st, force_check=True)
             return  # break the wait so the loop sweeps immediately
         time.sleep(min(5, left))
         if w is not None:
@@ -560,7 +562,9 @@ def _login_trigger(cfg: Config, st: dict) -> tuple[bool, str]:
     """Should we log in at all right now? (see RotationConfig.login_on_slot_only)"""
     if not cfg.rotation.login_on_slot_only:
         return True, "scheduled round"
-    if REFRESH_FILE.exists():
+    if REFRESH_FILE.exists() or st.get("force_check"):
+        REFRESH_FILE.unlink(missing_ok=True)
+        st.pop("force_check", None)
         return True, "asked from the dashboard"
     if in_burst_window(cfg):
         return True, "slot-release window"
