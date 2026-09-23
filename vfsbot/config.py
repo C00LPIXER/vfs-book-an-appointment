@@ -52,6 +52,7 @@ class NotifyConfig(BaseModel):
     alert_top_n: int = 0         # only alert for the first N centres in priority order (0 = all)
     quiet_hours_from: str = ""   # e.g. "23:00" — no voice calls between these (messages still go)
     quiet_hours_to: str = ""     # e.g. "07:00"
+    blind_alert_minutes: int = 40   # no successful check for this long -> tell the team the bot is blind
 
 
 class WhatsAppContact(BaseModel):
@@ -95,6 +96,12 @@ class RotationConfig(BaseModel):
     retry_minutes: int = 5             # short wait before the next account after a transient failure
     recheck_blocked_hours: float = 6.0 # a switched-off (blocked) account is tried again after this
     throttle_backoff_minutes: int = 45 # VFS rate-limits the whole IP -> every account waits this long
+    # Logging in is what gets accounts restricted and the IP throttled, and the public (no-login)
+    # endpoint already lists every centre. So by default we only log in when there is something to
+    # confirm: the public data shows a date for the watched category, the slot-release window is on,
+    # a human pressed "Login & check now", or the accounts have not been exercised for a while.
+    login_on_slot_only: bool = True
+    keepalive_login_hours: float = 12.0
     verify_ip: bool = True             # look up the public IP through the proxy before logging in
     require_proxy: bool = False        # refuse to log in when an account has no proxy configured
     ip_check_url: str = "https://api.ipify.org?format=json"

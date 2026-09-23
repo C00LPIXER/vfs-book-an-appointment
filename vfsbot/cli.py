@@ -148,6 +148,30 @@ def _direct_ip(url: str) -> str:
         return ""
 
 
+def _watchdog(cfg: Config, st: dict, notifier: Notifier, ok: bool, why: str = "") -> None:
+    """Silence must never look like 'no slots': if nothing has been checked successfully for
+    `notify.blind_alert_minutes`, tell the bot-issue contacts (once an hour)."""
+    now = datetime.now()
+    if ok:
+        _set(st, last_success_at=now.isoformat(timespec="seconds"))
+        if st.get("blind_since"):
+            _set(st, blind_since=None)
+            notifier.notice(f"\u2705 VFS bot: checks are working again ({INSTANCE}).")
+        return
+    last = st.get("last_success_at")
+    if not last:
+        return
+    quiet = (now - datetime.fromisoformat(last)).total_seconds() / 60
+    if quiet < cfg.notify.blind_alert_minutes:
+        return
+    stamp = now.strftime("%Y-%m-%d %H")
+    if st.get("blind_notice") == stamp:
+        return
+    _set(st, blind_since=st.get("blind_since") or last, blind_notice=stamp)
+    notifier.notice(f"\u26a0\ufe0f VFS bot is BLIND: no successful {INSTANCE} check for {quiet:.0f} min.\n"
+                    f"Reason: {why[:160]}\nNo slot alerts can arrive while this lasts.")
+
+
 def _handle_results(w, cfg: Config, st: dict, notifier: Notifier, results: list, all_centres: list | None = None) -> None:
     """Log the sweep, update the state file / matrix, alert + escalate on availability, heartbeat.
     When only a slice of the centres was checked (login mode), centres not in this batch keep the
@@ -167,6 +191,7 @@ def _handle_results(w, cfg: Config, st: dict, notifier: Notifier, results: list,
             else:
                 merged.append(SlotResult(False, None, "skipped", "", {}, c, error="not checked yet"))
         results = merged
+    _watchdog(cfg, st, notifier, ok=True)
     report = summarize(results)
     top_n = cfg.notify.alert_top_n or len(results)
     avail = [r for r in results[:top_n] if r.available]
@@ -311,6 +336,15 @@ def rotate_loop(cfg: Config, once: bool) -> int:
                         except Exception as e:  # noqa: BLE001
                             log_event("error", f"Proxy provisioning failed for {email}: {e}", "error")
                     pool = AccountPool()   # reload: proxies were assigned
+                go, why = _login_trigger(cfg, st)
+                if not go:
+                    _set(st, status="running", task=why, accounts=pool.status())
+                    delay = 120.0
+                    if once:
+                        return 0
+                    _sleep_keepalive(None, delay, st)
+                    continue
+                log.info("logging in — %s", why)
                 acct = pool.next(exclude=st.get("last_account_email", ""))
                 retrying_blocked = False
                 if acct is None:
@@ -331,6 +365,7 @@ def rotate_loop(cfg: Config, once: bool) -> int:
                     delay = max(60.0, min(cfg.rotation.retry_minutes * 60.0,
                                           (free_at - datetime.now()).total_seconds() + 5 if free_at else 60.0))
                 else:
+                    _set(st, last_login_round_at=datetime.now().isoformat(timespec="seconds"), login_reason=why)
                     _sweep_account(acct, pool, cfg, st, notifier, direct_ip)
                     if retrying_blocked:
                         pool.unblock(acct.email, "logged in again")
@@ -356,6 +391,20 @@ def rotate_loop(cfg: Config, once: bool) -> int:
                 delay = 60.0
         except SiteThrottled as e:
             # the IP is throttled, not the account: rest everything, do not switch anyone off
+            if cfg.ip_rotate.enabled:
+                # a phone/VPN can simply hand us another IP — far better than waiting out the limit
+                try:
+                    new_ip = rotate_ip(cfg, st.get("last_ip", ""))
+                    log.warning("%s — rotated to %s, carrying on", e, new_ip)
+                    log_event("control", f"VFS rate-limited the old IP — rotated to {new_ip}, continuing", "info")
+                    _set(st, status="running", task=f"VFS rate-limited the IP — switched to {new_ip}", ip=new_ip, last_ip=new_ip)
+                    delay = 60.0
+                    if once:
+                        return 0
+                    _sleep_keepalive(None, delay, st)
+                    continue
+                except ProxyError as re_:
+                    log.error("could not rotate the IP after a throttle: %s", re_)
             mins = cfg.rotation.throttle_backoff_minutes
             log.error("%s — pausing all accounts for %d min", e, mins)
             log_event("blocked", f"{e} — pausing logins for {mins} min", "error", screenshot=None)
@@ -466,6 +515,47 @@ def rotate_ip(cfg: Config, last_ip: str) -> str:
     log.info("new public IP: %s (was %s)", ip, last_ip or "?")
     log_event("control", f"IP rotated: {ip}" + (f" (was {last_ip})" if last_ip else ""), "info")
     return ip
+
+
+def _public_hit(cfg: Config) -> list[str]:
+    """Centres where the public (no-login) data shows a date for the watched category."""
+    try:
+        pub = json.loads(Path("state/public.json").read_text())
+    except Exception:  # noqa: BLE001
+        return []
+    want = (cfg.category or "D visa").lower().replace("d visa", "d visa")
+    enabled = {short_centre(c).lower() for c in cfg.centre_list}
+    hits = []
+    for row in pub.get("earliest_matrix", []):
+        if row.get("centre", "").lower() not in enabled:
+            continue
+        for cat, date in (row.get("cells") or {}).items():
+            if date and ("d visa" in cat.lower() if "d visa" in want else want in cat.lower()):
+                hits.append(f"{row['centre']} ({cat}: {date})")
+    return hits
+
+
+def _login_trigger(cfg: Config, st: dict) -> tuple[bool, str]:
+    """Should we log in at all right now? (see RotationConfig.login_on_slot_only)"""
+    if not cfg.rotation.login_on_slot_only:
+        return True, "scheduled round"
+    if REFRESH_FILE.exists():
+        return True, "asked from the dashboard"
+    if in_burst_window(cfg):
+        return True, "slot-release window"
+    hits = _public_hit(cfg)
+    if hits:
+        return True, "public data shows " + ", ".join(hits[:3])
+    last = st.get("last_login_round_at")
+    if not last:
+        return True, "first round — checking the accounts work"
+    try:
+        due = datetime.fromisoformat(last) + timedelta(hours=cfg.rotation.keepalive_login_hours)
+    except Exception:  # noqa: BLE001
+        return True, "keep-alive round"
+    if datetime.now() >= due:
+        return True, f"keep-alive round ({cfg.rotation.keepalive_login_hours:.0f} h since the last one)"
+    return False, f"no D-visa date in the public data — next keep-alive login at {due:%I:%M %p}".replace(" 0", " ")
 
 
 def _live_rows(cfg: Config, live: dict) -> list[dict]:
@@ -678,6 +768,7 @@ def watch_loop(w: Watcher, cfg: Config, once: bool) -> int:
             consecutive_errors += 1
             rate_limited = "429" in str(e) or "rate-limit" in str(e)
             mins = 30 if rate_limited else 15
+            _watchdog(cfg, st, notifier, ok=False, why=str(e)[:160])
             log.error("%s — backing off %d min.", e, mins)
             _set(st, status="blocked",
                  task=("VFS is rate-limiting this IP — retrying in %d min" % mins) if rate_limited
@@ -693,6 +784,7 @@ def watch_loop(w: Watcher, cfg: Config, once: bool) -> int:
             return 0
         except Exception as e:  # noqa: BLE001
             consecutive_errors += 1
+            _watchdog(cfg, st, notifier, ok=False, why=f"{type(e).__name__}: {str(e).splitlines()[0][:120]}")
             log.exception("check failed (%d in a row)", consecutive_errors)
             log_event("error", f"{type(e).__name__}: {str(e).splitlines()[0][:200]}", "error",
                       {"consecutive": consecutive_errors}, w.screenshot("error"))
