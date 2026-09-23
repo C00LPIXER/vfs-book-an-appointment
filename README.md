@@ -272,6 +272,19 @@ vfsbot ui                                         # dashboard on 127.0.0.1:8787
 The dashboard trusts requests from the machine itself and asks for a password for anything else
 (tunnel, LAN); it lives in `data/ui_auth.json` and `deploy/tunnel.sh` prints it.
 
+### Phone as the bot's IP (`deploy/phone-setup.sh`)
+
+VFS/Cloudflare refuses **hosting ASNs** outright (`403201`) — measured: a DigitalOcean Bangalore IP
+(`AS14061`, `hosting: true`) is blocked for both curl and a real browser, while the office Airtel
+line (`AS9498`, `hosting: false`) is fine. So cloud VMs, GitHub Actions and datacenter VPNs cannot be
+used as exits; only consumer ISP / mobile addresses work.
+
+An Android phone on USB gives exactly that, and a new carrier IP whenever mobile data reconnects
+(CGNAT pool). `./deploy/phone-setup.sh` checks adb, switches the phone to mobile data, finds the
+tethering interface and gives it the lower route metric; `--revert` puts the office line back.
+`config.yaml → ip_rotate` then toggles data before each login and refuses to continue unless the
+public IP actually changed; on a VFS throttle the bot rotates and carries on instead of waiting.
+
 ## 8. Files & state
 
 - `config.yaml` — settings (committed; no secrets).
