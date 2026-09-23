@@ -676,13 +676,17 @@ def watch_loop(w: Watcher, cfg: Config, once: bool) -> int:
                 login_alerted = True
         except Blocked as e:
             consecutive_errors += 1
-            log.error("BLOCKED by VFS/Cloudflare: %s — backing off 15 min.", e)
-            _set(st, status="blocked", task="blocked by Cloudflare/WAF — backing off 15 min")
+            rate_limited = "429" in str(e) or "rate-limit" in str(e)
+            mins = 30 if rate_limited else 15
+            log.error("%s — backing off %d min.", e, mins)
+            _set(st, status="blocked",
+                 task=("VFS is rate-limiting this IP — retrying in %d min" % mins) if rate_limited
+                 else "blocked by Cloudflare/WAF — backing off %d min" % mins)
             if consecutive_errors in (1, 5):
                 notifier.error(f"blocked by Cloudflare/WAF ({e}); backing off")
             if once:
                 return 2
-            _sleep_keepalive(w, 15 * 60, st)
+            _sleep_keepalive(w, mins * 60, st)
             continue
         except KeyboardInterrupt:
             _set(st, status="stopped", task="")

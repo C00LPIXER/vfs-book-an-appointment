@@ -212,6 +212,8 @@ class PublicWatcher:
             if '"code": "403' in res["text"] or res["status"] in (401, 403, 0):
                 self.load_page()
                 res = self.page.evaluate(_FETCH_JS, {"url": ENDPOINT, "tok": self._token, "payload": payload})
+        if '"429' in res["text"] or '"403' in res["text"]:
+            raise Blocked(f"VFS is rate-limiting this IP: {res['text'][:80]}")
         data = json.loads(res["text"])
         if not isinstance(data, dict) or "vacList" not in data:
             raise RuntimeError(f"unexpected response: {res['text'][:120]}")
@@ -339,6 +341,9 @@ class PublicApiWatcher:
         try:
             data = self._fetch_direct()
         except Blocked as e:
+            if "429" in str(e):
+                # the whole IP is rate-limited; a browser would only add to it
+                raise Blocked(f"VFS is rate-limiting this IP (public endpoint): {str(e)[:80]}") from e
             log.info("direct fetch blocked (%s)", str(e)[:80])
             data = self._fetch_browser()
         self.last_updated = data.get("lastUpdatedOn", "")
