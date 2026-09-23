@@ -246,6 +246,7 @@ class Watcher:
         self.imap_error: str = ""
         self.logged_in = False
         self.rate_limited = False
+        self.upload_throttled = False
         self._centre_hint = ""
         self.partial_results: list[SlotResult] = []
         self._pw = None
@@ -393,6 +394,8 @@ class Watcher:
                 body = ""
             log.warning("lift-api %s on %s: %s", resp.status, path, body)
             log_event("check" if resp.status in (409, 429) else "error", f"VFS API {resp.status} on {path}: {body}", "warn", {"status": resp.status})
+        if "UploadApplicantDocument" in url and resp.status in (409, 429):
+            self.upload_throttled = True      # VFS refuses more document uploads for now
         if "CheckIsSlotAvailable" in url and resp.status == 429:
             self.rate_limited = True      # VFS's per-session quota is spent: stop asking, or it logs us out
         if "CheckIsSlotAvailable" in url or "/appointment/slots" in url:
@@ -779,7 +782,8 @@ class Watcher:
                       screenshot=self.screenshot("passport_selected"))
             self.on_human_needed(f"First login of {self.account.name}: passport selected — press Continue in the bot's browser window")
         # wait for the step to be over (dashboard visible)
-        deadline = time.monotonic() + self.cfg.passport_wait_minutes * 60
+        started = time.monotonic()
+        deadline = started + self.cfg.passport_wait_minutes * 60
         tries = 0
         while time.monotonic() < deadline:
             if self._is_logged_in() or "/dashboard" in self.url or not self._on_passport_upload():
@@ -787,13 +791,18 @@ class Watcher:
                 if not self._on_passport_upload():
                     log_event("upload", f"Passport step done for {self.account.name}", "info")
                     return
-            if self.cfg.passport_auto_continue and tries < 4:
-                tries += 1
-                try:                      # VFS re-renders the panel after reading the image
+            waited_s = int(time.monotonic() - started)
+            if (self.cfg.passport_auto_continue and tries < 2 and not self.upload_throttled
+                    and waited_s >= 45 * (tries + 1)):
+                tries += 1      # the first click is done above; nudge again only after a long pause
+                log.info("passport: Continue not taken yet — clicking again (%d)", tries)
+                try:
                     human.click(self.page, self._continue_control(), timeout=4000)
                 except Exception:  # noqa: BLE001
                     pass
-            self.on_status(f"passport step — waiting for Continue ({int(deadline - time.monotonic())}s left)")
+            self.on_status(("passport step — VFS is rate-limiting the upload, waiting"
+                            if self.upload_throttled else "passport step — waiting for Continue")
+                           + f" ({int(deadline - time.monotonic())}s left)")
             self.page.wait_for_timeout(3000)
         log_event("upload", f"Passport step for {self.account.name} still waiting for Continue — giving up this sweep", "warn",
                   screenshot=self.screenshot("passport_timeout"))
