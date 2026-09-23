@@ -175,6 +175,11 @@ class SiteThrottled(Exception):
     /page-not-found). Nothing wrong with the account — wait, and give every account a rest."""
 
 
+class TokenStale(Exception):
+    """The `authorize` token captured from the SPA is no longer accepted — do one real form check,
+    which makes the site issue (and us capture) a fresh one, then carry on over the API."""
+
+
 class AccountRestricted(Blocked):
     """VFS restricted this specific account ("Access Restricted for User ID"). Nothing to wait for —
     the account must be switched off and the next one used."""
@@ -1121,19 +1126,61 @@ class Watcher:
                 return body_key, codes
         return None
 
+    # Measured against the live site: CheckIsSlotAvailable accepts just `authorize` +
+    # `content-type`. The SPA also sends `route` and a per-request `clientsource`, but including
+    # those makes VFS answer 409 "Repeated Delay" — it is the leaner request that is honoured.
+    API_HEADERS = ("authorize", "content-type")
+
+    def _api_request(self, body: dict) -> tuple[int, str]:
+        hdrs = {k: v for k, v in self._api_template["headers"].items() if k.lower() in self.API_HEADERS}
+        r = self.page.evaluate(self._FETCH_JS, {"url": self._api_template["url"], "headers": hdrs, "body": body})
+        return r["status"], r["text"]
+
+    @staticmethod
+    def _repeated_delay(status: int, text: str) -> int | None:
+        """VFS answers 409 {"code": N, "description": "Repeated Delay"} — N is how many seconds it
+        wants us to wait. Returns those seconds, or None when this is not that answer."""
+        if status != 409:
+            return None
+        try:
+            d = json.loads(text)
+        except Exception:  # noqa: BLE001
+            return None
+        if "repeated delay" not in str(d.get("description", "")).lower():
+            return None
+        try:
+            return max(1, min(120, int(d.get("code"))))
+        except Exception:  # noqa: BLE001
+            return 30
+
     def _check_via_api(self, centre: str, key: str, code: str) -> SlotResult:
-        """Replay the captured CheckIsSlotAvailable request for another centre (in-page fetch, so it
-        rides the browser's cookies, JWT and proxy)."""
-        body = dict(self._api_template["body"]); body[key] = code
-        r = self.page.evaluate(self._FETCH_JS, {"url": self._api_template["url"], "headers": self._api_template["headers"], "body": body})
-        if r["status"] != 200:
-            raise RuntimeError(f"API {r['status']}: {r['text'][:100]}")
-        api = json.loads(r["text"])
+        """Ask the API directly for one centre, from inside the logged-in page (so it rides the
+        session, cookies and proxy). Honours VFS's own "wait N seconds" answer."""
+        body = dict(self._api_template["body"])
+        body[key] = code
+        for attempt in range(3):
+            status, text = self._api_request(body)
+            wait = self._repeated_delay(status, text)
+            if wait is None:
+                break
+            if attempt == 2:
+                raise RuntimeError(f"still rate-limited after waiting ({wait}s asked)")
+            log.info("VFS asked for %ds before the next check — waiting", wait)
+            self.on_status(f"VFS asked to wait {wait}s before the next centre")
+            self.page.wait_for_timeout((wait + random.uniform(1, 3)) * 1000)
+        if status in (401, 403):
+            # the session token the SPA handed us has aged out; only the SPA can mint a fresh one
+            self._api_template = None
+            raise TokenStale(f"API {status}: {text[:80]}")
+        if status != 200:
+            raise RuntimeError(f"API {status}: {text[:100]}")
+        api = json.loads(text)
         earliest = api.get("earliestDate") or api.get("earliestSlotDate")
         err = api.get("error")
-        if err and not isinstance(err, dict) and "no slot" not in str(err).lower():
-            raise RuntimeError(f"API error: {str(err)[:100]}")
-        return SlotResult(bool(earliest) and not err, _fmt_date(earliest) if earliest else None, "api", "", api, centre)
+        # error 1035 is simply "no slots available" — a real answer, not a failure
+        if isinstance(err, dict) and err.get("code") not in (None, 0, 1035):
+            raise RuntimeError(f"API error {err.get('code')}: {str(err.get('description'))[:80]}")
+        return SlotResult(bool(earliest), _fmt_date(earliest) if earliest else None, "api", "", api, centre)
 
     def check_all(self, centres: list[str] | None = None, on_progress=None) -> list[SlotResult]:
         """Check the given centres (default: all configured) through the booking form, in order.
@@ -1155,15 +1202,25 @@ class Watcher:
             if on_progress:
                 on_progress(centre, "checking", None, i, len(centres))
             r = None
-            if self.cfg.api_replay and api_key and short_centre(centre) in codes:
+            if self.cfg.api_replay and api_key and self._api_template and short_centre(centre) in codes:
                 try:
                     r = self._check_via_api(centre, api_key, codes[short_centre(centre)])
                     r.centre = centre
+                except TokenStale as e:
+                    # expected every few calls: check this centre through the form, which refreshes
+                    # the token, and the centres after it go back to the fast path
+                    log.info("session token aged out (%s) — refreshing it with a form check", str(e)[:60])
+                    self.on_status(f"refreshing the session token on {short_centre(centre)}")
+                    r = None
                 except Exception as e:  # noqa: BLE001
                     log.warning("API check %s failed (%s) — using the form", centre, str(e).splitlines()[0][:80])
                     r = None
             if r is None:
                 try:
+                    if self._last_api is None and i:      # coming back from the API path
+                        self.goto(f"{self.cfg.base_url}/application-detail")
+                        self._wait_for_spa()
+                        human.dwell(self.page, 800, 2000)
                     r = self.check(centre)
                 except LoginRequired:
                     raise
@@ -1172,7 +1229,7 @@ class Watcher:
                     r = SlotResult(False, None, "error", "", {}, centre, error=str(e).splitlines()[0][:80])
                     if self._on_login_page():
                         raise LoginRequired(self.url)
-                if self.cfg.api_replay and i == 0 and not api_key:
+                if self.cfg.api_replay and not api_key:
                     found = self._centre_codes(r.centre)
                     if found:
                         api_key, codes = found
@@ -1188,7 +1245,9 @@ class Watcher:
                 pause = self.cfg.centre_pause_seconds * 1000
                 self.page.wait_for_timeout(human.jitter(pause * 0.5, pause * 1.7))
             else:
-                self.page.wait_for_timeout(random.randint(400, 900))
+                # a direct API check costs ~0.4s, so space them out like a person clicking around
+                lo, hi = self.cfg.api_pause_seconds
+                self.page.wait_for_timeout(int(random.uniform(lo, hi) * 1000))
             results.append(r)
             log.info("  %s", r.summary())
             if on_progress:

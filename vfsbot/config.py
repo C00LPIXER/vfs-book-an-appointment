@@ -147,7 +147,10 @@ class Config(BaseModel):
     sweep_all_centres: bool = True       # one rotation = one account covers every enabled centre,
     max_logins_per_sweep: int = 2        #   at most this many logins per account per rotation
     relogin_gap_seconds: int = 120       #   with this gap (randomised) between those logins
-    api_replay: bool = False   # replaying the SPA's API call directly gets 401 (per-request signed header); keep off
+    # After the first centre is checked through the form, the rest are asked straight from the
+    # site's own API inside the logged-in page: ~0.4s each instead of ~45s of dropdown driving.
+    api_replay: bool = True
+    api_pause_seconds: tuple[float, float] = (10.0, 20.0)   # random gap between those calls
     interval_seconds: int = 300          # login mode: one login per this interval
     jitter_seconds: int = 45
     public_interval_seconds: int = 300   # public (no-login) mode: refresh the earliest-date data this often

@@ -176,6 +176,37 @@ Bench rules (`data/accounts_state.json`, doubling per consecutive failure, max 2
 | login / OTP timeout | nothing after `login_wait_minutes` (3) | `cooloff_hours / 2` |
 | proxy dead / leaking | IP lookup fails or IP unchanged | 1 h |
 
+#### Checking a centre over the API (`api_replay`)
+
+Driving the booking form costs ~45 s per centre. Measured against the live site, the same answer
+comes from one request in ~0.4 s:
+
+```
+POST https://lift-api.vfsglobal.com/appointment/CheckIsSlotAvailable
+headers: authorize: <token the SPA is using>       # from the page's own request
+         content-type: application/json
+body:    {"countryCode":"ind","missionCode":"bgr","vacCode":"HYD",
+          "visaCategoryCode":"LONGSTAY","roleName":"Individual","loginUser":"…","payCode":""}
+```
+
+Facts established by testing, each of which cost an attempt to learn:
+
+| Header set | Answer |
+|---|---|
+| everything the SPA sends (incl. `route`, `clientsource`) | `409 {"code":32,"description":"Repeated Delay"}` |
+| without `clientsource` | `409 … "Repeated Delay"` |
+| `authorize` + `route` + `content-type` | `409 … "Repeated Delay"` |
+| **`authorize` + `content-type`** | **`200`** with `earliestDate` / `error.code 1035` = no slots |
+
+* `409 {"code": N, "description": "Repeated Delay"}` — **N is the number of seconds to wait**; the
+  bot sleeps exactly that long (plus a second or two) and retries.
+* `error.code 1035` inside a `200` means "no slots", not a failure.
+* The `authorize` token ages out after a few direct calls (`401101 Invalid Request`). Only the SPA
+  can mint a new one, so that centre is checked through the form — which refreshes the token — and
+  the following centres go back to the fast path. A full round is roughly 3 form checks + 8 API
+  calls instead of 11 form checks.
+* Calls are spaced by `api_pause_seconds` (10–20 s, random) so the traffic still looks human.
+
 #### Automatic proxies (`vfsbot/proxies.py`, `config.yaml → proxy_auto`)
 
 With a cloud API token in `data/proxy_provider.json` (dashboard → *Proxy auto-provision*) and
