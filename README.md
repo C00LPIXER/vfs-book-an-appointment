@@ -252,7 +252,27 @@ needs-human, errors, heartbeat). The profile suppresses session-restore so it op
 
 ---
 
-## 7. Files & state
+## 7. Running it on another machine
+
+No AI or API keys at runtime — the bot is plain Python (Playwright drives a real Brave, `curl_cffi`
+calls the public endpoint, FastAPI serves the dashboard, IMAP reads the OTP).
+
+```bash
+git clone <repo> && cd vfs-book-an-appointment
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e . && playwright install chromium   # a real Brave/Chrome is still required for VFS
+vfsbot ui                                         # dashboard on 127.0.0.1:8787
+./deploy/tunnel.sh                                # public HTTPS link for phones (+ the password)
+```
+
+`data/` (accounts, passwords, IMAP app passwords, proxy state), `state/`, `documents/` and the
+`*-profile/` browser sessions are **gitignored** — re-enter the accounts on the Settings tab and run
+`vfsbot whatsapp-setup` once, or copy those folders across by hand for an identical setup.
+
+The dashboard trusts requests from the machine itself and asks for a password for anything else
+(tunnel, LAN); it lives in `data/ui_auth.json` and `deploy/tunnel.sh` prints it.
+
+## 8. Files & state
 
 - `config.yaml` — settings (committed; no secrets).
 - `data/` — **gitignored**, everything secret/runtime as JSON: `accounts.json` (VFS creds, IMAP app
