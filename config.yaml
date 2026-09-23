@@ -106,7 +106,7 @@ rotation:
   retry_minutes: 5
   recheck_blocked_hours: 6.0
   throttle_backoff_minutes: 45
-  login_on_slot_only: true
+  login_on_slot_only: false
   keepalive_login_hours: 12.0
   verify_ip: true
   require_proxy: false
