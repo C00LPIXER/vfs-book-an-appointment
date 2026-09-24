@@ -2,32 +2,32 @@ mode: login
 base_url: https://visa.vfsglobal.com/ind/en/bgr
 centre: ''
 centres:
-- name: Cochin
-  enabled: false
-- name: Chennai
+- name: Ahmedabad
   enabled: true
 - name: Bangalore
   enabled: true
-- name: Puducherry
-  enabled: true
-- name: Hyderabad
-  enabled: true
-- name: Goa
-  enabled: true
-- name: Pune
-  enabled: true
-- name: Mumbai
+- name: Chennai
   enabled: true
 - name: Kolkata
   enabled: true
-- name: Ahmedabad
-  enabled: true
-- name: Jaipur
-  enabled: false
-- name: Gurugram
+- name: Mumbai
   enabled: true
 - name: New Delhi
   enabled: true
+- name: Cochin
+  enabled: false
+- name: Puducherry
+  enabled: false
+- name: Hyderabad
+  enabled: false
+- name: Goa
+  enabled: false
+- name: Pune
+  enabled: false
+- name: Jaipur
+  enabled: false
+- name: Gurugram
+  enabled: false
 - name: Chandigarh
   enabled: false
 - name: Jalandhar
@@ -111,7 +111,6 @@ rotation:
   verify_ip: true
   require_proxy: false
   ip_check_url: https://api.ipify.org?format=json
-  round_gap_minutes: 60
 proxy_auto:
   enabled: false
   provider: digitalocean
@@ -128,6 +127,3 @@ passport_file: documents/passport_bio.jpg
 passport_auto_continue: true
 passport_wait_minutes: 10
 team: 4indegree · AAI (Anas and Amal Intelligence)
-api_pause_seconds:
-- 10.0
-- 20.0

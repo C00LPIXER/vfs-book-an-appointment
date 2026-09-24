@@ -217,9 +217,41 @@ def _stop_watcher(inst: str) -> None:
     events.log_event("control", f"{INSTANCES[inst]['label']} watcher stopped", "info")
 
 
+def _prune_to_config(st: dict) -> dict:
+    """Only show centres that are ticked right now. The stored rows are written when a sweep ends,
+    so without this the dashboard keeps listing centres for minutes (or a whole round) after they
+    were unticked."""
+    try:
+        from ..watcher import short_centre
+        wanted = [short_centre(c) for c in Config.load().centre_list]
+    except Exception:  # noqa: BLE001
+        return st
+    order = {c: i for i, c in enumerate(wanted)}
+    for key in ("centre_live", "last_results"):
+        rows = st.get(key)
+        if isinstance(rows, list):
+            kept = [r for r in rows if isinstance(r, dict) and r.get("centre") in order]
+            kept.sort(key=lambda r: order.get(r.get("centre"), 99))
+            # centres ticked but never checked yet still deserve a row
+            have = {r.get("centre") for r in kept}
+            for c in wanted:
+                if c not in have:
+                    kept.append({"centre": c, "state": "pending", "earliest": None,
+                                 "checked_at": None, "by": None, "error": ""}
+                                if key == "centre_live" else
+                                {"centre": c, "available": False, "earliest": None, "error": "not checked yet"})
+            kept.sort(key=lambda r: order.get(r.get("centre"), 99))
+            st[key] = kept
+    rows = st.get("earliest_matrix")
+    if isinstance(rows, list):
+        st["earliest_matrix"] = sorted([r for r in rows if r.get("centre") in order],
+                                       key=lambda r: order.get(r.get("centre"), 99))
+    return st
+
+
 def _instance_status(inst: str) -> dict:
     sp = _paths(inst)
-    st = json.loads(sp["state"].read_text()) if sp["state"].exists() else {}
+    st = _prune_to_config(json.loads(sp["state"].read_text())) if sp["state"].exists() else {}
     running = _running(inst)
     if not running and st.get("status") not in (None, "stopped"):
         st["status"] = "stopped"

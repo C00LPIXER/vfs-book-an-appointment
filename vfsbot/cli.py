@@ -605,6 +605,14 @@ def _sweep_account(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Not
         if not remaining:
             break
         if attempt:
+            # pick up a centre list edited on the dashboard without waiting for the next round
+            cfg = _reload_config()
+            fresh = [c for c in cfg.centre_list if c not in all_centres]
+            gone = [c for c in all_centres if c not in cfg.centre_list]
+            if fresh or gone:
+                log.info("centre list changed mid-round (+%s -%s)", fresh or "none", gone or "none")
+                all_centres = list(cfg.centre_list)
+                remaining = [c for c in remaining if c in all_centres] + fresh
             gap = random.uniform(cfg.relogin_gap_seconds * 0.7, cfg.relogin_gap_seconds * 1.3)
             log.info("%d centre(s) left — signing in again as %s in %.0fs", len(remaining), acct.name, gap)
             _set(st, status="running", task=f"{len(remaining)} centre(s) left — next login as {acct.name} in {gap / 60:.0f} min")
