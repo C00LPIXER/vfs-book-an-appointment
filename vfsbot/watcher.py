@@ -1185,7 +1185,7 @@ class Watcher:
     def _api_request(self, body: dict) -> tuple[int, str]:
         # VFS answers 401101 "Invalid Request" when two slot checks arrive close together — the
         # spacing matters more than the headers, so wait out the gap before asking.
-        lo, hi = self.cfg.api_pause_seconds
+        lo, hi = self.centre_pause()
         since = time.monotonic() - self._last_slot_call
         need = random.uniform(lo, hi) - since
         if need > 0:
@@ -1250,6 +1250,18 @@ class Watcher:
         if isinstance(err, dict) and err.get("code") not in (None, 0, 1035):
             raise RuntimeError(f"API error {err.get('code')}: {str(err.get('description'))[:80]}")
         return SlotResult(bool(earliest), _fmt_date(earliest) if earliest else None, "api", "", api, centre)
+
+    def centre_pause(self) -> tuple[float, float]:
+        """Gap between two slot checks. VFS rejects checks that arrive too close together, so the
+        floor is fixed; with few centres we can afford to be slower still, which looks more human.
+        Scales by itself when a centre is added or removed — nothing to re-tune."""
+        lo, hi = self.cfg.api_pause_seconds
+        n = max(1, len(self.cfg.centre_list))
+        if n <= 4:
+            return lo * 1.5, hi * 1.5
+        if n >= 12:
+            return lo, hi * 0.8
+        return lo, hi
 
     def check_all(self, centres: list[str] | None = None, on_progress=None) -> list[SlotResult]:
         """Check the given centres (default: all configured) through the booking form, in order.
