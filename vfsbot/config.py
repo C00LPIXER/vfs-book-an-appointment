@@ -168,6 +168,16 @@ class Config(BaseModel):
     rotation: RotationConfig = Field(default_factory=RotationConfig)
     proxy_auto: ProxyAutoConfig = Field(default_factory=ProxyAutoConfig)
     ip_rotate: IpRotateConfig = Field(default_factory=IpRotateConfig)
+    # --- codes VFS uses on the wire (seen in its own requests) --------------------------------
+    mission_code: str = "bgr"           # Bulgaria
+    country_code: str = "ind"           # India
+    culture_code: str = "en-US"
+    category_code: str = "LONGSTAY"     # visaCategoryCode for the Long Stay D visa
+    # --- the no-login detector (master/centerwithslots) ----------------------------------------
+    slot_probe_seconds: float = 45.0    # how often to ask; nothing is authenticated, so this is cheap
+    slot_probe_jitter: float = 0.15     # +/-15% so the rhythm is not machine-perfect
+    slot_backoff_seconds: float = 1800  # after 5 rate-limits/blocks in a row, sit out 30 min
+    slot_confirm_hits: int = 2          # confirm a hit twice before waking anyone
     passport_file: str = "documents/passport_bio.jpg"
     passport_auto_continue: bool = False   # first login of an account: bot presses Continue after selecting the passport
     passport_wait_minutes: int = 10        # ...otherwise how long to wait for a human to press it

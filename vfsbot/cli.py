@@ -743,6 +743,90 @@ def _run_sweep_as(acct, pool: AccountPool, cfg: Config, st: dict, notifier: Noti
     return checked_centres
 
 
+def _wait_probing(cfg: Config, st: dict, notifier: Notifier, probe, seconds: float, w=None) -> None:
+    """Wait for the next earliest-date sweep, but keep the no-login detector running throughout.
+
+    This is what makes the watch continuous: the slow sweep is only for the dashboard matrix, while
+    availability is caught within a minute by probes that no account is involved in."""
+    end = time.monotonic() + seconds
+    next_probe = 0.0
+    while (left := end - time.monotonic()) > 0:
+        if STOP_FILE.exists():
+            return
+        if REFRESH_FILE.exists():
+            REFRESH_FILE.unlink(missing_ok=True)
+            _set(st, force_check=True)
+            return
+        if time.monotonic() >= next_probe:
+            try:
+                slot_alarm(cfg, st, notifier, probe)
+            except Exception as e:  # noqa: BLE001  (a probe must never kill the watcher)
+                log.warning("slot probe failed: %s", str(e).splitlines()[0][:120])
+            next_probe = time.monotonic() + probe.next_delay()
+        _set(st, next_check_in=int(left))
+        if w is not None:
+            w.keepalive()
+        time.sleep(min(5.0, max(0.5, left)))
+
+
+def slot_alarm(cfg: Config, st: dict, notifier: Notifier, probe) -> bool:
+    """One pass of the no-login detector. Returns True when a confirmed opening was announced.
+
+    Nothing here is authenticated, so this can run every minute for ever without putting an account
+    at risk — which is the whole point: accounts are only for confirming and booking, never looking.
+    """
+    from .slotwatch import BLOCK_CF, BLOCK_WAF, NO_SLOTS, RATE_LIMIT, SLOT
+
+    p = probe.probe()
+    now = datetime.now().isoformat(timespec="seconds")
+    _set(st, slot_probe_state=p.state, slot_probe_at=now,
+         slot_probe_detail=p.detail[:160], slot_probe_centres=p.centres)
+
+    if p.state == NO_SLOTS:
+        _watchdog(cfg, st, notifier, ok=True)
+        if st.get("slot_open_key"):
+            _set(st, slot_open_key="")          # it closed again; a later opening alerts afresh
+        return False
+
+    if p.state in (RATE_LIMIT, BLOCK_WAF, BLOCK_CF):
+        streak = max(probe.rate_streak, probe.waf_streak)
+        log.warning("slot probe %s (%d in a row)", p.state, streak)
+        if streak >= 5:
+            log_event("blocked", f"Slot probe {p.state} {streak}x — backing off "
+                                 f"{cfg.slot_backoff_seconds / 60:.0f} min", "warn")
+            _watchdog(cfg, st, notifier, ok=False, why=f"slot probe {p.state}")
+        return False
+
+    if p.state != SLOT:
+        log.info("slot probe: %s (%s)", p.state, p.detail[:80])
+        return False
+
+    confirmed = probe.confirm(cfg.slot_confirm_hits)
+    if not confirmed:
+        log.info("slot probe flickered — not confirmed on the second look")
+        return False
+
+    key = ",".join(sorted(confirmed.centres))
+    if key == st.get("slot_open_key"):
+        return False                              # already shouted about exactly this
+    _set(st, slot_open_key=key, slot_open_at=now)
+
+    names = ", ".join(short_centre(c) for c in confirmed.centres)
+    log.warning("SLOTS OPEN: %s", names)
+    log_event("alert", f"SLOTS OPEN ({cfg.category}): {names}", "alert", {"centres": confirmed.centres})
+    notifier.slot_found(
+        "\U0001F389 VFS SLOTS OPEN\n"
+        f"Category: {cfg.category}\n"
+        f"Centres: {names}\n"
+        f"Seen: {datetime.now().strftime('%d-%m %I:%M %p')}\n\n"
+        f"Book now: {cfg.base_url}/login\n"
+        f"Reply {cfg.whatsapp_web.ack_keyword.upper()} to stop the calls.",
+        key)
+    # wake the login watcher so it confirms and can book
+    Path("state/login.sweep_now").touch()
+    return True
+
+
 def watch_loop(w: Watcher, cfg: Config, once: bool) -> int:
     notifier = Notifier(cfg.notify)
     st = _load_state()
@@ -759,6 +843,11 @@ def watch_loop(w: Watcher, cfg: Config, once: bool) -> int:
 
     w.on_otp_required = _otp_hook
     w.on_human_needed = _human_hook
+    _probe = None
+    if cfg.mode == "public":
+        from .slotwatch import SlotProbe
+        _probe = SlotProbe(cfg, proxy=cfg.public_proxy)
+        log.info("no-login slot detector armed: %s", _probe.url)
     STOP_FILE.unlink(missing_ok=True)
     _set(st, status="starting", task="opening browser", pid=__import__("os").getpid(), started_at=datetime.now().isoformat(timespec="seconds"))
     log_event("control", "Watcher started", "info")
@@ -830,6 +919,9 @@ def watch_loop(w: Watcher, cfg: Config, once: bool) -> int:
         if PAUSE_FILE.exists() or not in_run_window(cfg)[0]:
             delay = 30.0
         elif cfg.mode == "public" and not in_burst_window(cfg):
+            # the earliest-date sweep above is the slow, informational one; the real alarm is the
+            # no-login detector, which runs far more often while we wait for the next sweep
+            pass
             # follow VFS's own refresh cycle rather than a fixed interval
             age = st.get("vfs_updated_value")
             unit = {"S": 0, "M": 1, "H": 60, "D": 1440}.get((st.get("vfs_updated_type") or "M").upper(), 1)
@@ -838,9 +930,13 @@ def watch_loop(w: Watcher, cfg: Config, once: bool) -> int:
             delay = 60.0        # retry login quickly once someone has helped
         else:
             delay = next_delay(cfg)
-        log.info("next check in %.0fs", delay)
+        log.info("next sweep in %.0f min%s", delay / 60,
+                 " (no-login slot detector keeps running)" if _probe is not None else "")
         try:
-            _sleep_keepalive(w, delay, st)
+            if _probe is not None:
+                _wait_probing(cfg, st, notifier, _probe, delay, w)
+            else:
+                _sleep_keepalive(w, delay, st)
         except KeyboardInterrupt:
             _set(st, status="stopped", task="")
             return 0
