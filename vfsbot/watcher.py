@@ -324,6 +324,19 @@ class Watcher:
             from .proxies import ensure_tunnel
             self.account.proxy = ensure_tunnel(self.account.email)   # (re)starts the SSH SOCKS tunnel if needed
         proxy = self.account.playwright_proxy()
+        # A phone tunnel lives on 127.0.0.1; if the cable is out the port is simply dead. Carry on
+        # over the normal line instead of benching the account every minute for an unplugged phone.
+        if proxy and "127.0.0.1" in proxy["server"]:
+            import socket as _socket
+            port = int(proxy["server"].rsplit(":", 1)[-1])
+            try:
+                with _socket.create_connection(("127.0.0.1", port), timeout=2):
+                    pass
+            except OSError:
+                log.warning("phone proxy on port %d is not answering — using this machine's line", port)
+                log_event("control", f"Phone proxy (port {port}) is down — {self.account.name} is using the direct line", "warn")
+                proxy = None
+                self.account.proxy = ""
         if proxy:
             log.info("proxy: %s%s", proxy["server"], " (auto tunnel)" if self.account.proxy_auto else "")
         elif self.cfg.rotation.require_proxy:

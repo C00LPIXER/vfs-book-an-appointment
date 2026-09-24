@@ -23,3 +23,6 @@ __pycache__/
 
 # misc
 *.log
+
+# cloned reference repos (research only, not ours)
+research/
