@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VFS Slot Status</title>
+<style>
+  :root{--bg:#0b0e13;--card:#141922;--line:#222a36;--text:#e6edf6;--muted:#8b97a8;--dim:#55606e;
+        --ok:#5bd98a;--warn:#ff9a3c}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:720px;margin:0 auto;padding:32px 20px 64px}
+  h1{font-size:30px;margin:0 0 4px;letter-spacing:-.4px}
+  .sub{color:var(--muted);font-size:14px;margin-bottom:28px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;margin:16px 0}
+  .dl{display:block;background:var(--ok);color:#06240f;font-weight:700;font-size:18px;text-align:center;
+      padding:18px;border-radius:12px;text-decoration:none}
+  .dl small{display:block;font-weight:500;font-size:12px;opacity:.75;margin-top:3px}
+  h2{font-size:12px;letter-spacing:.09em;color:var(--muted);text-transform:uppercase;margin:0 0 12px}
+  ol{margin:0;padding-left:20px}  li{margin:9px 0}
+  .note{border-left:3px solid var(--warn);padding-left:14px;color:var(--muted);font-size:14px}
+  ul.f{list-style:none;padding:0;margin:0}
+  ul.f li{padding:9px 0;border-bottom:1px solid var(--line);color:var(--muted);font-size:14.5px}
+  ul.f li:last-child{border:0}
+  b{color:var(--text)}
+  footer{color:var(--dim);font-size:12px;text-align:center;margin-top:36px}
+  @media(max-width:520px){.wrap{padding:22px 14px 48px}h1{font-size:25px}}
+</style></head><body><div class="wrap">
+
+<h1>VFS Slot Status</h1>
+<div class="sub">Bulgaria long-stay D visa · India — checks hourly, rings when a slot opens.</div>
+
+<div class="card">
+  <a class="dl" href="VFS-Slot-Status-v2.8.apk" download>Download for Android
+    <small>version 2.8 · 50 KB</small></a>
+</div>
+
+<div class="card">
+  <h2>After installing</h2>
+  <ol>
+    <li>Android will ask to allow installing from wherever you opened the file. Allow it.</li>
+    <li>Open the app, go to <b>Settings (gear) → Permissions &amp; background</b>, and work down the
+        list until every line has a tick. A line left crossed means the hourly check will be late,
+        silent, or will not happen.</li>
+    <li class="note">On <b>vivo, iQOO, Xiaomi, Oppo and Realme</b> there is one more that Android
+        cannot report: turn on <b>Auto-start</b> and allow <b>high background power use</b> in the
+        phone's own battery settings. Without it those phones hold the alarm for hours — measured on
+        an iQOO: six checks queued, the oldest five days late.</li>
+  </ol>
+</div>
+
+<div class="card">
+  <h2>What it does</h2>
+  <ul class="f">
+    <li>Checks once an hour, timed from when <b>VFS itself last published</b> — not from when you
+        last opened the app.</li>
+    <li>When a slot appears: rings the caller tone on the alarm stream, vibrates, blinks the camera
+        light, and puts an answer screen over the lock screen.</li>
+    <li>Keeps ringing <b>every two minutes until somebody types a reply</b>, so a pocket cannot
+        silence it.</li>
+    <li>A slot still open at the next check says so quietly instead of ringing again.</li>
+    <li>Tells you when a check fails or VFS rate-limits the phone, rather than going quiet.</li>
+    <li>Keeps a history of every check and a log of the exact request and raw response.</li>
+    <li>Reads only the public feed — <b>no account, no login, no booking</b>.</li>
+  </ul>
+</div>
+
+<footer>4inDegree · AAI — notify only; booking is done by the applicant.</footer>
+</div></body></html>
